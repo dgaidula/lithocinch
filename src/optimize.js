@@ -21,6 +21,8 @@ import { encodeWebp } from './webp.js';
 import { encodeAvif } from './avif.js';
 import { finalizeGif } from './gif.js';
 import { pickBestFormat } from './best-format.js';
+import { contentAwareEncode } from './content-aware.js';
+import { ssim, toLuma } from './ssim.js';
 
 const EFFORT_RANGE = {
   png: [1, 10],
@@ -92,39 +94,84 @@ function buildPipeline(input, meta, cfg, animated) {
   return { pipeline, resized };
 }
 
-/** Direct encode path for animated GIF/WebP (no raw round-trip, no SSIM search). */
+// Compatibility rank for the animated tie-break (lower = more universal). GIF is
+// universal; animated WebP is broadly but not universally supported.
+const ANIM_RANK = { gif: 0, webp: 1 };
+
+/**
+ * Animated GIF/WebP path. `format` is 'gif', 'webp', or 'auto'. For 'auto' it
+ * runs a real WebP-vs-GIF shootout (AVIF is excluded — libheif animation is
+ * unreliable), scoring SSIM across ALL frames. Content-aware WebP (lossy search
+ * vs lossless) + lossless gifsicle GIF, smallest perceptually-OK candidate wins.
+ */
 async function optimizeAnimated(input, meta, cfg, format, resized, pipeline) {
   if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ icc: 'srgb' });
 
-  let data;
-  let engine = 'sharp';
-  if (format === 'webp') {
-    data = await pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.webpEffort, 'webp') }).toBuffer();
-  } else {
-    const sharpGif = await pipeline
+  // Decode the processed frame strip once: the reference for SSIM + classify.
+  const ref = await pipeline.clone().raw().toBuffer({ resolveWithObject: true });
+  const sInfo = ref.info; // { width, height: pageHeight*pages, channels }
+  const refLuma = toLuma(ref.data, sInfo.width, sInfo.height, sInfo.channels);
+  const scoreOf = async (buf) => {
+    const d = await sharp(buf, { animated: true }).raw().toBuffer({ resolveWithObject: true });
+    const got = toLuma(d.data, d.info.width, d.info.height, d.info.channels);
+    return ssim(refLuma, got, sInfo.width, sInfo.height, { downsample: cfg.webpSsimDownsample });
+  };
+
+  const wEffort = Math.min(6, Math.max(0, cfg.webpEffort));
+  const makeWebp = async () => {
+    const r = await contentAwareEncode({
+      inputFormat: meta.format,
+      rawBuf: ref.data,
+      info: sInfo,
+      target: cfg.webpTargetSsim,
+      downsample: cfg.webpSsimDownsample,
+      min: cfg.webpMin,
+      max: cfg.webpMax,
+      colorCap: cfg.webpGraphicColorCap,
+      decodeOpts: { animated: true },
+      encodeLossy: (q) => pipeline.clone().webp({ quality: q, alphaQuality: cfg.webpAlphaQuality, effort: wEffort, smartSubsample: true }).toBuffer(),
+      encodeLossless: () => pipeline.clone().webp({ lossless: true, effort: wEffort, quality: cfg.webpQuality }).toBuffer(),
+    });
+    return { data: r.data, format: 'webp', ssim: r.mode === 'lossy' ? r.ssim : 1, engine: `webp-${r.mode}` };
+  };
+  const makeGif = async () => {
+    const g = await pipeline
+      .clone()
       .gif({ colours: cfg.gifColors, dither: cfg.gifDither, effort: Math.min(10, Math.max(1, cfg.gifEffort)) })
       .toBuffer();
-    const g = await finalizeGif(sharpGif, cfg); // lossless gifsicle pass (auto)
-    data = g.data;
-    engine = g.engine;
+    const fin = await finalizeGif(g, cfg); // lossless gifsicle -O3 when available
+    return { data: fin.data, format: 'gif', ssim: await scoreOf(fin.data), engine: fin.engine };
+  };
+
+  const candidates = [];
+  if (format === 'gif') candidates.push(await makeGif());
+  else if (format === 'webp') candidates.push(await makeWebp());
+  else candidates.push(await makeWebp(), await makeGif()); // auto
+
+  // Untouched original (never inflate) when it could be the output and we didn't resize.
+  if (!resized && (format === 'auto' || meta.format === format)) {
+    candidates.push({ data: input, format: meta.format, ssim: 1, engine: 'passthrough', original: true });
   }
 
-  // Never-inflate: if we kept the same format, didn't resize, and the re-encode
-  // isn't smaller, ship the original untouched (libvips animated re-encodes can
-  // be larger than a well-packed source).
-  if (format === meta.format && !resized && data.length >= input.length) {
-    data = input;
-    engine = 'passthrough';
-  }
+  // Smallest that clears the perceptual bar; tie-break toward the more compatible.
+  let pool = candidates.filter((c) => c.ssim == null || c.ssim >= cfg.perceptualTarget);
+  if (!pool.length) pool = candidates;
+  pool.sort((a, b) => a.data.length - b.data.length);
+  const ceiling = pool[0].data.length * (1 + cfg.formatTolerance);
+  const within = pool.filter((c) => c.data.length <= ceiling);
+  within.sort((a, b) => (ANIM_RANK[a.format] ?? 9) - (ANIM_RANK[b.format] ?? 9) || a.data.length - b.data.length);
+  const win = within[0];
 
+  const m = await sharp(win.data).metadata();
   return {
-    data,
-    info: { format, width: meta.width, height: meta.height, size: data.length },
+    data: win.data,
+    info: { format: win.format, width: m.width, height: m.height, size: win.data.length },
     inputFormat: meta.format,
-    outputFormat: format,
+    outputFormat: win.format,
     resized,
     quality: null,
-    engine,
+    ssim: win.original || win.ssim === 1 ? null : win.ssim,
+    engine: win.original ? 'passthrough' : win.engine,
   };
 }
 
@@ -142,12 +189,12 @@ export async function optimizeImageBuffer(input, options = {}) {
   const meta = await sharp(inputBuf, { failOn: 'none' }).metadata();
   const inputFormat = meta.format || 'unknown';
   const isAnimated = (meta.pages || 1) > 1 && (inputFormat === 'gif' || inputFormat === 'webp');
-  // `--format auto` picks the best format per image. Animated auto -> WebP
-  // (animated WebP reliably beats GIF); static auto runs the candidate shootout.
+  // `--format auto` picks the best format per image. Static auto runs the
+  // candidate shootout here; animated auto runs a WebP-vs-GIF shootout in
+  // optimizeAnimated (which understands 'auto').
   const autoStatic = cfg.format === 'auto' && !isAnimated;
-  const format =
-    cfg.format === 'auto' ? (isAnimated ? 'webp' : 'auto') : targetFormat(inputFormat, cfg);
-  const keepAnimation = isAnimated && (format === 'gif' || format === 'webp');
+  const format = cfg.format === 'auto' ? 'auto' : targetFormat(inputFormat, cfg);
+  const keepAnimation = isAnimated && (format === 'gif' || format === 'webp' || format === 'auto');
 
   const { pipeline, resized } = buildPipeline(inputBuf, meta, cfg, keepAnimation);
   // Pixels are only "untransformed" (so the original may be passed straight

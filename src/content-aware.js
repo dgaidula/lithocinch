@@ -57,6 +57,7 @@ export async function contentAwareEncode(o) {
       max: o.max,
       target: o.target,
       downsample: o.downsample,
+      decodeOpts: o.decodeOpts, // animated candidates decode all frames
     });
     return { data: r.data, mode: 'lossy', quality: r.quality, ssim: r.ssim };
   };

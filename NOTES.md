@@ -107,6 +107,11 @@ quality), falling back to sharp-only when it isn't. `--gif-engine sharp` forces
 the portable path; `--gif-engine gifsicle` requires the binary. Opt-in
 `--gif-lossy <n>` enables gifsicle's lossy LZW for extra savings.
 
+**Animated** GIF/WebP are feature-complete: `--format auto` runs a WebP-vs-GIF
+shootout (AVIF excluded — libheif animation is unreliable), scoring SSIM across
+*all* frames, and keeps the smallest. Measured: a 45.6 KB animated GIF → 1.3 KB
+animated WebP, 8 frames preserved. See RESEARCH §9a.
+
 **SVG** — 2.9 used `imageminSvgo({ multipass:true, removeViewBox:false })` on an
 old svgo (v2/3, bundled by imagemin-svgo). 3.x calls **svgo v4 directly** with
 `preset-default` + `multipass`, viewBox preserved. svgo v4's preset is newer and

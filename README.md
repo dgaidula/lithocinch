@@ -294,6 +294,9 @@ at the cost of slower encoding. Both share one **perceptually-lossless** knob,
 - **GIF** uses sharp (libimagequant) for pixels, then a lossless `gifsicle -O3`
   pass. `--gif-engine auto` (default) runs gifsicle when it's installed — best
   for animations — and falls back to sharp otherwise.
+- **Animated GIF/WebP** are handled too: `--format auto` runs a WebP-vs-GIF
+  shootout (SSIM measured across all frames) and keeps the smallest — a 45 KB
+  animated GIF becomes a ~1 KB animated WebP, frames preserved.
 - **SVG** uses **svgo v4** (`preset-default` + multipass, viewBox preserved).
 
 ### Opinionated `auto` engines

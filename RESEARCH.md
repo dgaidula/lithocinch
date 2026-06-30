@@ -247,7 +247,8 @@ so it's "run N encoders on shared pixels, compare, pick" (`src/best-format.js`).
      pairing with `--emit` fallbacks).
 - **Measured** (`--format auto`): photographic PNG **1.27 MB → 4.3 KB AVIF**
   (the "photo-as-PNG" annoyance, fixed); flat graphic → WebP-lossless; alpha
-  graphic → WebP (alpha preserved); JPEG photo → AVIF.
+  graphic → WebP (alpha preserved); JPEG photo → AVIF; animated GIF → animated
+  WebP (see §9a).
 - **The manifest is essential** because extensions change. `--manifest out.json`
   records `input → output, format, bytes` for every file (primary + emitted), so
   build tools / HTML rewriting know `hero.jpg` became `hero_opt.avif`. Re-runs
@@ -257,6 +258,27 @@ so it's "run N encoders on shared pixels, compare, pick" (`src/best-format.js`).
 - **Cost:** 2–4 candidate encodes per image (each a small SSIM search); classify
   pruning keeps most to ~2; one shared decode; `--concurrency` parallelizes
   across files. Heavier than fixed-format — the manifest cache makes re-runs free.
+
+### 9a. Animated images — WebP-vs-GIF shootout
+
+Animation closes the last format gap. AVIF is excluded (libheif animation is
+unreliable), so the pool is **{WebP, GIF}** plus the untouched original:
+- **WebP candidate** = the same content-aware logic (classify → lossy quality
+  search vs lossless), but encoded over the animated pipeline (`sharp.clone()`
+  branches the resize/colour stage per candidate) and **scored by SSIM across the
+  whole frame strip** (all frames at once — the raw buffer is the stacked pages),
+  not just frame 0. `searchQuality`/`contentAwareEncode` gained a `decodeOpts`
+  pass so candidates decode with `{animated:true}`.
+- **GIF candidate** = sharp's libimagequant GIF + the lossless `gifsicle -O3`
+  pass, scored the same way.
+- Pick the smallest that clears the perceptual bar; tie-break toward GIF (more
+  universally supported than animated WebP).
+- Measured: a 45.6 KB animated GIF → **1.3 KB animated WebP** (8 frames kept);
+  an already-tight animated WebP passes through untouched (never inflate); forcing
+  `--format gif`/`webp` round-trips with frames preserved.
+
+This makes every format — still, animated, vector — feature-complete under the
+same "smallest perceptually-lossless" policy.
 
 ---
 
@@ -268,11 +290,11 @@ so it's "run N encoders on shared pixels, compare, pick" (`src/best-format.js`).
   each raster for `<picture>` fallbacks; de-dups the primary format, fills in
   missing siblings on re-runs, skips SVG.
 - ~~Auto-pick output format~~ — **shipped** (§9): `--format auto` + manifest.
+- ~~Animated WebP-vs-GIF shootout~~ — **shipped** (§9a): SSIM scored across all
+  frames; AVIF excluded (libheif animation unreliable).
 - **Cross-format SSIM consistency:** candidates are scored with each codec's own
   SSIM downsample setting; a uniform re-score would make the perceptual filter
   exact (currently lossless candidates are normalized to 1.0, which is enough).
-- **Animated auto** currently maps to WebP; a true animated-WebP-vs-GIF shootout
-  could squeeze a bit more.
 - **AVIF/WebP for graphics with alpha:** verify near-lossless vs lossless choice
   on UI assets with transparency.
 - **Perceptual metric:** SSIM under-rates dithering and over-rates some blur;

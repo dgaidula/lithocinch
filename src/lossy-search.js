@@ -20,12 +20,14 @@ import { ssim, toLuma } from './ssim.js';
  * @param {boolean} [o.downsample]  SSIM auto-downsample (faster)
  * @returns {Promise<{ data: Buffer, quality: number, ssim: number }>}
  */
-export async function searchQuality({ encode, refLuma, width, height, min, max, target, downsample }) {
+export async function searchQuality({ encode, refLuma, width, height, min, max, target, downsample, decodeOpts = {} }) {
   const cache = new Map();
   const score = async (q) => {
     if (cache.has(q)) return cache.get(q);
     const data = await encode(q);
-    const dec = await sharp(data).raw().toBuffer({ resolveWithObject: true });
+    // decodeOpts lets animated candidates decode all frames (the strip) so SSIM
+    // is measured across the whole animation, not just the first frame.
+    const dec = await sharp(data, decodeOpts).raw().toBuffer({ resolveWithObject: true });
     const cand = toLuma(dec.data, dec.info.width, dec.info.height, dec.info.channels);
     const r = { data, ssim: ssim(refLuma, cand, width, height, { downsample }) };
     cache.set(q, r);
