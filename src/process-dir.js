@@ -17,6 +17,15 @@ const IMAGE_EXTS = [...RASTER_EXTS, ...SVG_EXTS];
 
 function noop() {}
 
+/** Best guess of a file's primary output format (for --emit de-duplication). */
+function primaryOutputFormat(rel, ext, isSvg, cfg) {
+  if (isSvg) return 'svg';
+  if (cfg.format) return cfg.format;
+  if ((ext === 'tif' || ext === 'tiff') && cfg.tiffToJpeg) return 'jpeg';
+  if (ext === 'jpg') return 'jpeg';
+  return ext;
+}
+
 async function exists(p) {
   try {
     await fs.access(p);
@@ -56,6 +65,8 @@ export async function processDirectory(options = {}, hooks = {}) {
     skipped: 0,
     errors: 0,
     copied: 0,
+    emitted: 0,
+    emittedBytes: 0,
     bytesIn: 0,
     bytesOut: 0,
     errorFiles: [],
@@ -99,49 +110,86 @@ export async function processDirectory(options = {}, hooks = {}) {
       spaceChar: cfg.spaceChar,
     });
     const relOut = cfg.flatten ? path.basename(previewName) : previewName;
-    plan.push({ rel, isSvg, srcAbs: path.join(inputRoot, rel), previewOut: path.join(outputRoot, relOut) });
+    plan.push({
+      rel,
+      isSvg,
+      srcAbs: path.join(inputRoot, rel),
+      previewOut: path.join(outputRoot, relOut),
+      primaryFormat: primaryOutputFormat(rel, ext, isSvg, cfg),
+    });
   }
 
   await runPool(plan, cfg.concurrency, async (job) => {
-    if (!cfg.overwrite && (await exists(job.previewOut))) {
+    // Read the source at most once, lazily — the primary may be skipped while a
+    // sibling (--emit) still needs encoding.
+    let bytes = null;
+    const getBytes = async () => (bytes ??= await fs.readFile(job.srcAbs));
+
+    // --- primary output ---
+    const primaryNeeded = cfg.overwrite || !(await exists(job.previewOut));
+    if (!primaryNeeded) {
       stats.skipped++;
       onProgress({ type: 'skip', file: job.rel });
-      return;
-    }
-
-    let bytes;
-    try {
-      bytes = await fs.readFile(job.srcAbs);
-    } catch (err) {
-      return recordError(job, err, 'read');
-    }
-
-    try {
-      const result = await optimizeBytes(bytes, job.rel, cfg);
-      const relOut = cfg.flatten ? path.basename(result.outName) : result.outName;
-      const destAbs = path.join(outputRoot, relOut);
-
-      if (!cfg.dryRun) {
-        await fs.mkdir(path.dirname(destAbs), { recursive: true });
-        await fs.writeFile(destAbs, result.data);
+    } else {
+      try {
+        await getBytes();
+      } catch (err) {
+        return recordError(job, err, 'read');
       }
+      try {
+        const result = await optimizeBytes(bytes, job.rel, cfg);
+        const relOut = cfg.flatten ? path.basename(result.outName) : result.outName;
+        const destAbs = path.join(outputRoot, relOut);
+        if (!cfg.dryRun) {
+          await fs.mkdir(path.dirname(destAbs), { recursive: true });
+          await fs.writeFile(destAbs, result.data);
+        }
+        stats.processed++;
+        stats.bytesIn += bytes.length;
+        stats.bytesOut += result.data.length;
+        onProgress({
+          type: 'done',
+          file: job.rel,
+          outFile: relOut,
+          kind: result.kind,
+          quality: result.quality ?? null,
+          ssim: result.ssim ?? null,
+          engine: result.engine ?? null,
+          bytesIn: bytes.length,
+          bytesOut: result.data.length,
+        });
+      } catch (err) {
+        return recordError(job, err, 'optimize', bytes); // primary failed -> don't emit siblings
+      }
+    }
 
-      stats.processed++;
-      stats.bytesIn += bytes.length;
-      stats.bytesOut += result.data.length;
-      onProgress({
-        type: 'done',
-        file: job.rel,
-        outFile: relOut,
-        kind: result.kind,
-        quality: result.quality ?? null,
-        ssim: result.ssim ?? null,
-        engine: result.engine ?? null,
-        bytesIn: bytes.length,
-        bytesOut: result.data.length,
-      });
-    } catch (err) {
-      return recordError(job, err, 'optimize', bytes);
+    // --- additional outputs (--emit), raster only ---
+    if (!job.isSvg && cfg.emit.length) {
+      for (const fmt of cfg.emit) {
+        if (fmt === job.primaryFormat) continue; // don't duplicate the primary
+        const sibName = buildOutputName(job.rel, {
+          suffix: cfg.suffix,
+          outputFormat: fmt,
+          lowercaseExt: cfg.lowercaseExt,
+          spaceChar: cfg.spaceChar,
+        });
+        const sibRel = cfg.flatten ? path.basename(sibName) : sibName;
+        const sibDest = path.join(outputRoot, sibRel);
+        if (!cfg.overwrite && (await exists(sibDest))) continue; // already emitted
+        try {
+          await getBytes();
+          const sib = await optimizeBytes(bytes, job.rel, { ...cfg, format: fmt });
+          if (!cfg.dryRun) {
+            await fs.mkdir(path.dirname(sibDest), { recursive: true });
+            await fs.writeFile(sibDest, sib.data);
+          }
+          stats.emitted++;
+          stats.emittedBytes += sib.data.length;
+          onProgress({ type: 'emit', file: job.rel, outFile: sibRel, format: fmt, engine: sib.engine ?? null, bytesOut: sib.data.length });
+        } catch (err) {
+          log.error(`[emit ${fmt}] ${job.rel}: ${err.message}`);
+        }
+      }
     }
   });
 

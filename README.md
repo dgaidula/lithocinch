@@ -78,6 +78,7 @@ process-images ./photos --dry-run --verbose
 | `-m, --max-size <px>` | `2560` | Cap width & height (`0` / `--no-resize` to disable) |
 | `-f, --format <fmt>` | *keep* | Force output to `jpeg`/`png`/`webp`/`avif`/`gif`/`tiff` |
 | `--webp-mode <m>` | `auto` | `auto` (classify + shoot out), `lossy`, `lossless`, `near-lossless` |
+| `--emit <formats>` | — | Also write sibling formats (e.g. `webp,avif`) for `<picture>` |
 | `--square` | off | Pad to a `max-size` square using `--bg-color` |
 | `--jpeg-target <ssim>` | `0.999` | Adaptive JPEG SSIM target (`0.999` = jpeg-recompress "low") |
 | `--jpeg-min` / `--jpeg-max` | `30` / `60` | Adaptive JPEG quality search band |
@@ -97,6 +98,31 @@ process-images ./photos --dry-run --verbose
 Run `process-images --help` for the complete list (color, trim, metadata, AVIF,
 SVG, error-dir, etc.). Every option also exists as a library option key — see
 the mapping table in [NOTES.md](./NOTES.md).
+
+## Emit `<picture>` fallbacks alongside originals
+
+`--emit` writes extra formats **next to** each optimized image (keeping the
+primary), so you get a modern-format set without changing the original:
+
+```bash
+process-images ./photos --emit webp,avif
+#  photo.jpg  ->  photo_opt.jpg   (primary, optimized)
+#               + photo_opt.webp  (content-aware)
+#               + photo_opt.avif  (content-aware)
+```
+
+Each sibling uses that codec's content-aware/perceptual settings. The primary
+format is never duplicated, SVGs are skipped, and re-runs fill in only missing
+siblings — so adding `--emit avif` to an already-processed tree just backfills the
+AVIFs. Pair with `<picture>`:
+
+```html
+<picture>
+  <source srcset="photo_opt.avif" type="image/avif">
+  <source srcset="photo_opt.webp" type="image/webp">
+  <img src="photo_opt.jpg" alt="">
+</picture>
+```
 
 ## Library usage
 
@@ -229,12 +255,12 @@ at the cost of slower encoding. Both share one **perceptually-lossless** knob,
 
 ## PNG, GIF, and SVG
 
-- **PNG** uses sharp's `palette: true`, which is **libimagequant** — the exact
-  library `pngquant` wraps — at max effort (= pngquant `speed:1`). It adds an
-  **SSIM gate** (`--png-min-ssim`, default 0.85): if palette quantization would
-  drop quality too far, it keeps a lossless encoding instead — the portable
-  equivalent of pngquant's min-quality "bail". `--png-engine pngquant` shells out
-  to the real binary for byte-exact 2.9 parity; `--png-lossless` forces lossless.
+- **PNG** uses sharp's `palette: true` (**libimagequant** — the exact library
+  `pngquant` wraps) at max effort. It runs a **perceptual palette search**: it
+  keeps the smallest palette that's still perceptually lossless (`--png-min-ssim`,
+  default 0.92, full-res SSIM), and falls back to lossless for gradients/photos
+  that can't be palettized cleanly. `--png-engine pngquant` shells out to the real
+  binary for byte-exact 2.9 parity; `--png-lossless` forces lossless.
 - **GIF** uses sharp (libimagequant) for pixels, then a lossless `gifsicle -O3`
   pass. `--gif-engine auto` (default) runs gifsicle when it's installed — best
   for animations — and falls back to sharp otherwise.

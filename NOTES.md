@@ -80,12 +80,16 @@ binaries (output size **and** measured SSIM), not assumed.
 - **The one real gap, now closed:** pngquant's `min` quality makes it *bail*
   (keep the image lossless) when palettization would drop below the floor — a
   deliberate "don't ship something ugly" guard. libvips doesn't expose that. So
-  3.x adds an **SSIM gate** (`--png-min-ssim`, default 0.85, scored full-res):
-  palettize, measure SSIM vs the source, and if it's too low, keep a lossless
-  encoding instead. Verified: a smooth wide-gamut gradient (SSIM 0.62) falls back
-  to lossless — even *smaller* than pngquant's own lossless bail (272K vs 291K),
-  same quality. A logo (SSIM 1.0) stays palette. The upstream never-inflate guard
-  caps the lossless fallback at the original size.
+  3.x runs a **perceptual palette search** (`--png-min-ssim`, default 0.92, scored
+  full-res): encode the top quality, and if even that is below the gate keep
+  lossless; otherwise try lower qualities too and ship the **smallest file** that
+  still clears the gate. (Palette size is non-monotonic with quality — dithering
+  can make a *lower* quality larger — so it compares bytes, not quality numbers.
+  See RESEARCH §2.) Verified: a smooth gradient (SSIM 0.62) falls back to
+  lossless — even *smaller* than pngquant's own lossless bail (272K vs 291K),
+  same quality. A UI graphic ships a q75 palette (smallest that's perceptually
+  perfect). The upstream never-inflate guard caps the lossless fallback at the
+  original size.
 - For **byte-exact parity**, `--png-engine pngquant` shells out to the real
   binary with 2.9's exact `--quality 50-60 --speed 1`.
 - **The default is actually `auto`** (see §1g): it runs both sharp and pngquant
@@ -241,9 +245,9 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `svgBatchLimit` | `10` | *(folded into `--concurrency`)* | — | |
 | `emptyTmpFolder` | `true` | *(removed)* | — | no temp dir anymore |
 | jpeg `quality` (fixed) | n/a | `--jpeg-quality` | `jpegQuality` | **only used in `--jpeg-mode fixed`**; default 80. The default mode is adaptive (see rows above), so this flag is normally irrelevant |
-| `imageminPngquant({quality})` | `[0.5,0.6]` | `--png-quality` | `pngQuality` | libimagequant is the same engine pngquant wraps. Single 0–100 ceiling now; **default raised to 80** (≥ 2.9's 50–60 = equal-or-better quality). See §1f |
+| `imageminPngquant({quality})` | `[0.5,0.6]` | `--png-quality` / `--png-min-quality` | `pngQuality` / `pngMinQuality` | libimagequant (the engine pngquant wraps). Now a palette-quality **search** ceiling/floor (100/50); the smallest *file* that clears the gate wins. See §1f/RESEARCH §2 |
 | `imageminPngquant({speed})` | `1` | `--png-effort` | `pngEffort` | pngquant speed:1 ("best") == libimagequant effort 10, the new default |
-| *(pngquant min-quality bail)* | implicit | `--png-min-ssim` | `pngMinSsim` | portable replacement for pngquant's "keep lossless if too lossy"; default 0.85. See §1f |
+| *(pngquant min-quality bail)* | implicit | `--png-min-ssim` | `pngMinSsim` | perceptual gate: palette must clear this SSIM or fall back to lossless. **Default 0.92** (perceptually-lossless separator). See §1f |
 | *(png engine)* | pngquant | `--png-engine` | `pngEngine` | **`auto`** (default; shoots out sharp vs pngquant, keeps smaller quality-passing), `sharp`, or `pngquant` (exact parity). See §1g |
 | `imageminGifsicle()` | defaults (`-O1`) | `--gif-engine` | `gifEngine` | **`auto`** (default; sharp + lossless `gifsicle -O3` when available), `sharp`, or `gifsicle`. See §1f/§1g |
 | `imageminSvgo({multipass})` | `true` | `--no-svg-multipass` | `svgMultipass` | svgo upgraded v2/3 → **v4**; see §1f |
@@ -257,6 +261,7 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | — (new) | — | `-f, --format` | `format` | force everything to one format (e.g. `--format webp`) |
 | — (new) | — | `--keep-metadata` | `keepMetadata` | re-embed sRGB ICC + EXIF |
 | — (new) | — | `--flatten` | `flatten` | write output flat instead of mirroring subfolders |
+| — (new) | — | `--emit` | `emit` | also write sibling formats (e.g. `webp,avif`) beside each raster for `<picture>` fallbacks |
 | — (new) | — | `--dry-run` | `dryRun` | plan only, write nothing |
 | — (new) | — | `--quiet` / `--verbose` / `--json` | — | output control |
 

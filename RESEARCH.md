@@ -87,13 +87,28 @@ Findings, measured against the real `pngquant` binary:
   too low. Measured: a smooth gradient (palette SSIM **0.616**) falls back to
   lossless — **272 KB**, even smaller than pngquant's own lossless bail (291 KB),
   same quality; a logo (SSIM **1.000**) stays palette.
-- **Why the PNG gate is 0.85, not the 0.99 perceptual target:** SSIM penalizes
-  the high-frequency noise that *dithering* deliberately adds, even though humans
-  don't see it. A strict 0.99 gate would send normal dithered palettes to
-  lossless and bloat output. 0.85 catches genuinely-broken palettization
-  (gradients/photos) while letting good dithered palettes through; the lossless
-  fallback is the true perceptual floor. Photographic PNGs that fall back to
-  lossless are better served by `--format webp`/`avif` anyway.
+- **Perceptual palette search (replaces the fixed-quality + gate).** Calibration
+  across UI/graphic, gradient, and alpha test images surfaced two facts:
+  - **Palette file size is NON-monotonic with quality** — at very low quality,
+    dithering raises entropy and *grows* the file. Measured (UI graphic):
+    q40 → 5,504 B but q60 → 3,254 B. So a JPEG-style "lowest quality that passes"
+    search would pick a *larger* file. The PNG search instead compares **actual
+    bytes**: encode the top quality, then a couple of lower ones, and keep the
+    **smallest file** that still clears the perceptual gate.
+  - **SSIM cleanly separates palette-friendly from not.** Palette-friendly
+    content (UI, flat colour, alpha) scores **~1.0** even at q60; gradients cap at
+    **~0.82** at *any* quality. So the gate decides palette-vs-lossless: encode
+    the top quality first, and if even that is below the gate the image isn't
+    palette-friendly → lossless (the perceptually-lossless floor).
+  - **Gate default 0.92** (raised from 0.85). It sits in the empty band between
+    "palette-friendly ≈1.0" and "gradient ≈0.82", so it ships crisp palettes and
+    routes gradients/photos to lossless. Still below the WebP/AVIF 0.99 because
+    SSIM penalizes dithering noise humans don't see — measured full-res, so it is
+    NOT fooled by banding (a gradient palette scores 0.62 full-res vs ~1.0
+    downsampled). Photographic PNGs that fall back to lossless are better served
+    by `--format webp`/`avif` anyway.
+  - Cost: 1 palette encode for non-palette-friendly images (early-out to
+    lossless), ~3 for palette-friendly. ~0.5 s on a 900×700 PNG.
 - **`auto` (default)** shoots out sharp (gated) vs the real pngquant and keeps the
   smaller that passes the bar. Closes the remaining *size* gap: on tiny/flat
   PNGs libvips is chunky — a flat logo **594 B (sharp) → 195 B (pngquant)**,
@@ -211,11 +226,11 @@ prints the winning engine per file under `--verbose` (e.g. `... via pngquant`).
 
 ## 9. Open questions / future work
 
-- **PNG perceptual search:** replace the fixed-quality-palette + gate with a
-  palette-quality *search* to the perceptual target (like JPEG), accounting for
-  the dithering/SSIM mismatch. Would make PNG fully consistent with the goal.
-- **"Also emit" mode:** write `foo.webp`/`foo.avif` *alongside* the original for
-  `<picture>` fallbacks, instead of only `--format` conversion.
+- ~~PNG perceptual search~~ — **shipped** (§2): byte-comparing palette-quality
+  search with a 0.92 perceptual gate and lossless fallback.
+- ~~"Also emit" mode~~ — **shipped**: `--emit webp,avif` writes siblings next to
+  each raster for `<picture>` fallbacks; de-dups the primary format, fills in
+  missing siblings on re-runs, skips SVG.
 - **Auto-pick output format:** opinionated "ship whichever format is smallest at
   the perceptual target" — gated behind a flag because it changes extensions.
 - **AVIF/WebP for graphics with alpha:** verify near-lossless vs lossless choice

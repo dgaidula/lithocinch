@@ -187,6 +187,8 @@ export async function optimizeImageBuffer(input, options = {}) {
     const r = await encodePng(rawBuf, rawInfo, cfg);
     data = r.data;
     engine = r.engine;
+    quality = r.quality ?? null;
+    ssimOut = r.ssim ?? null;
     const m = await sharp(data).metadata();
     info = { format: 'png', width: m.width, height: m.height, size: data.length };
   } else if (format === 'gif') {

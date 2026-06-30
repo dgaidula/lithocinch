@@ -57,16 +57,20 @@ export const DEFAULTS = Object.freeze({
   // 'auto' = shoot out sharp vs pngquant (when on PATH), keep the smallest that
   // clears the quality gate. 'sharp' = portable/deterministic. 'pngquant' = exact 2.9.
   pngEngine: 'auto', // 'auto' | 'sharp' | 'pngquant'
-  pngQuality: 80, // libimagequant quality ceiling (2.9 used 50-60; 80 keeps more color = >= quality)
+  pngQuality: 100, // palette quality search CEILING (libimagequant)
+  pngMinQuality: 50, // palette quality search FLOOR
   pngEffort: 10, // libimagequant effort 1-10; 10 == pngquant speed:1 ("best", 2.9's choice)
   pngColors: 256, // max palette colors (pngquant default)
   pngDither: 1.0, // Floyd-Steinberg dither (pngquant default)
   pngLossless: false, // true = skip palette quantization, lossless zlib only
-  // Quality gate (the portable replacement for pngquant's min-quality bail): if a
-  // palette PNG scores below this SSIM vs the source, fall back to lossless.
-  pngMinSsim: 0.85,
-  // Full-res SSIM for the gate: it runs once per PNG (not in a search loop like
-  // JPEG), and full-res is more protective — it won't smooth away palette banding.
+  // Perceptual gate: the palette must clear this SSIM vs the source to be used,
+  // else fall back to lossless (the perceptually-lossless floor). ~0.9 cleanly
+  // separates palette-friendly content (graphics/UI, SSIM ~1.0) from gradients
+  // and photos (SSIM ~0.8), which belong in lossless PNG or WebP/AVIF. Lower than
+  // the WebP/AVIF 0.99 because SSIM penalizes dithering noise humans don't see.
+  pngMinSsim: 0.92,
+  // Full-res SSIM for the gate: it must not smooth away palette banding (a
+  // gradient palette scores 0.62 full-res but ~1.0 downsampled).
   pngSsimDownsample: false,
   // pngquant binary engine knobs (only when pngEngine:'pngquant') — defaults are 2.9's exact values.
   pngquantMin: 50,
@@ -127,6 +131,13 @@ export const DEFAULTS = Object.freeze({
   copyNonImagesByType: false, // was const copyNonImageByType (off by default; opt-in)
   copyBak: false, // was const copyBakFiles (was half-disabled/buggy in 2.9; opt-in + fixed)
 
+  // ---- additional outputs ----
+  // Formats to ALSO emit next to each optimized raster (for <picture> fallbacks):
+  // e.g. ['webp','avif'] writes photo_opt.jpg + photo_opt.webp + photo_opt.avif.
+  // Each uses that codec's content-aware/perceptual settings. Skips the format
+  // that already equals the primary output.
+  emit: [],
+
   // ---- runtime ----
   concurrency: 16, // replaces batchLimit/svgBatchLimit; in-memory buffers, no crash-batching needed
   dryRun: false, // NEW: report what would happen, write nothing
@@ -168,6 +179,25 @@ export function resolveConfig(opts = {}) {
   if (cfg.avifTargetSsim == null) cfg.avifTargetSsim = cfg.perceptualTarget;
 
   if (typeof cfg.bgColor === 'string') cfg.bgColor = parseColor(cfg.bgColor);
+
+  // Normalize/validate the additional-output formats.
+  if (cfg.emit && cfg.emit.length) {
+    cfg.emit = [
+      ...new Set(
+        cfg.emit.map((f) => {
+          let fmt = String(f).toLowerCase().trim();
+          if (fmt === 'jpg') fmt = 'jpeg';
+          if (fmt === 'tif') fmt = 'tiff';
+          if (!OUTPUT_FORMATS.includes(fmt)) {
+            throw new Error(`Invalid --emit format "${f}". Expected: ${OUTPUT_FORMATS.join(', ')}`);
+          }
+          return fmt;
+        })
+      ),
+    ];
+  } else {
+    cfg.emit = [];
+  }
 
   return cfg;
 }

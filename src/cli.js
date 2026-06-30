@@ -34,6 +34,7 @@ program
   .option('-s, --suffix <str>', 'string inserted before the extension of each output file', '_opt')
   .option('--overwrite', 'reprocess files even if the output already exists', false)
   .option('--flatten', 'drop the source subfolder tree; write all output files flat', false)
+  .option('--emit <formats>', 'also write these formats beside each raster (e.g. "webp,avif") for <picture> fallbacks')
   // --- resize / geometry ---
   .option('-m, --max-size <px>', 'cap width & height to this many pixels (0 = no resize)', '2560')
   .option('--no-resize', 'alias for --max-size 0')
@@ -73,9 +74,10 @@ program
       .choices(['auto', 'sharp', 'pngquant'])
       .default('auto')
   )
-  .option('--png-quality <n>', 'PNG palette quality 1-100 (libimagequant; 2.9 used ~60)', '80')
+  .option('--png-quality <n>', 'PNG palette quality search ceiling 1-100', '100')
+  .option('--png-min-quality <n>', 'PNG palette quality search floor 1-100', '50')
   .option('--png-effort <n>', 'PNG palette effort 1-10 (10 = pngquant speed:1, best)', '10')
-  .option('--png-min-ssim <n>', 'fall back to lossless if a palette PNG scores below this SSIM (0 = never)', '0.85')
+  .option('--png-min-ssim <n>', 'palette must clear this SSIM or fall back to lossless (0 = never)', '0.92')
   .option('--png-lossless', 'lossless PNG (no palette quantization, zlib only)', false)
   // The unified perceptually-lossless bar (drives WebP + AVIF lossy searches).
   .option('--perceptual-target <ssim>', 'perceptually-lossless SSIM bar for WebP/AVIF', '0.99')
@@ -135,6 +137,7 @@ program.action(async (input, opts) => {
     suffix: opts.suffix,
     overwrite: opts.overwrite,
     flatten: opts.flatten,
+    emit: opts.emit ? opts.emit.split(',').map((s) => s.trim()).filter(Boolean) : [],
     // commander sets opts.resize=false when --no-resize is passed.
     maxSize: opts.resize === false ? 0 : Number(opts.maxSize),
     square: opts.square,
@@ -154,6 +157,7 @@ program.action(async (input, opts) => {
     jpegQuality: Number(opts.jpegQuality),
     pngEngine: opts.pngEngine,
     pngQuality: Number(opts.pngQuality),
+    pngMinQuality: Number(opts.pngMinQuality),
     pngEffort: Number(opts.pngEffort),
     pngMinSsim: Number(opts.pngMinSsim),
     pngLossless: opts.pngLossless,
@@ -225,6 +229,9 @@ program.action(async (input, opts) => {
         bar?.increment({ file: truncate(evt.file) });
         break;
       }
+      case 'emit':
+        if (opts.verbose) logger.info(`  + ${evt.outFile} (${fmtBytes(evt.bytesOut)})${evt.engine ? pc.cyan(` via ${evt.engine}`) : ''}`);
+        break;
       case 'skip':
         bar?.increment({ file: pc.dim(`skip ${truncate(evt.file)}`) });
         break;
@@ -270,6 +277,7 @@ program.action(async (input, opts) => {
       `  skipped   : ${stats.skipped}\n` +
       `  errors    : ${stats.errors ? pc.red(stats.errors) : 0}\n` +
       `  copied    : ${stats.copied}\n` +
+      (stats.emitted ? `  emitted   : ${stats.emitted} extra (${fmtBytes(stats.emittedBytes)})\n` : '') +
       `  size      : ${fmtBytes(stats.bytesIn)} -> ${fmtBytes(stats.bytesOut)} ` +
       `(${pc.green(`-${pct}%`)}, saved ${fmtBytes(saved)})\n` +
       `  time      : ${(ms / 1000).toFixed(2)}s\n`

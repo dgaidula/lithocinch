@@ -24,18 +24,33 @@ async function richPng(w = 600, h = 400) {
   return sharp(px, { raw: { width: w, height: h, channels: 3 } }).png({ compressionLevel: 9 }).toBuffer();
 }
 
-test('default PNG path quantizes to a palette and shrinks the file', async () => {
-  const src = await richPng();
-  const { data, outputFormat } = await optimizeImageBuffer(src, { maxSize: 0 });
+// A palette-friendly graphic: flat colour blocks (the case where palettization
+// is the expected, perceptually-lossless outcome).
+async function graphicPng(w = 600, h = 400) {
+  const px = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 3;
+      const c = (((x / 75) | 0) + ((y / 50) | 0)) % 5;
+      px[i] = [30, 90, 150, 210, 240][c];
+      px[i + 1] = px[i] - 10;
+      px[i + 2] = px[i] + 10;
+    }
+  }
+  return sharp(px, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+}
+
+test('default PNG path quantizes a graphic to a palette and shrinks it', async () => {
+  const src = await graphicPng();
+  const { data, outputFormat, engine } = await optimizeImageBuffer(src, { maxSize: 0 });
   assert.equal(outputFormat, 'png');
   assert.ok(data.length < src.length, `expected ${data.length} < ${src.length}`);
-  const meta = await sharp(data).metadata();
-  assert.equal(meta.format, 'png');
+  assert.match(engine, /sharp|pngquant/);
 });
 
 test('PNG palette output uses <= 256 distinct colors', async () => {
-  const src = await richPng(); // source has thousands of colors
-  const { data } = await optimizeImageBuffer(src, { maxSize: 0 });
+  const src = await graphicPng();
+  const { data } = await optimizeImageBuffer(src, { maxSize: 0, pngEngine: 'sharp' });
   const { data: px, info } = await sharp(data).raw().toBuffer({ resolveWithObject: true });
   const colors = new Set();
   for (let i = 0; i < px.length; i += info.channels) {
@@ -46,10 +61,32 @@ test('PNG palette output uses <= 256 distinct colors', async () => {
 });
 
 test('higher png effort is equal-or-better (no larger) than lower effort', async () => {
-  const src = await richPng();
-  const hi = await optimizeImageBuffer(src, { maxSize: 0, pngEffort: 10 });
-  const lo = await optimizeImageBuffer(src, { maxSize: 0, pngEffort: 1 });
+  const src = await graphicPng();
+  const hi = await optimizeImageBuffer(src, { maxSize: 0, pngEngine: 'sharp', pngEffort: 10 });
+  const lo = await optimizeImageBuffer(src, { maxSize: 0, pngEngine: 'sharp', pngEffort: 1 });
   assert.ok(hi.data.length <= lo.data.length, `effort10 ${hi.data.length} should be <= effort1 ${lo.data.length}`);
+});
+
+test('the PNG search falls a gradient back to lossless (perceptually lossless)', async () => {
+  const w = 500, h = 400, px = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 3;
+      px[i] = (x * 255 / w) | 0;
+      px[i + 1] = (y * 255 / h) | 0;
+      px[i + 2] = ((x + y) * 255 / (w + h)) | 0;
+    }
+  }
+  const src = await sharp(px, { raw: { width: w, height: h, channels: 3 } }).png().toBuffer();
+  const { data } = await optimizeImageBuffer(src, { maxSize: 0, pngEngine: 'sharp' });
+  // A true gradient can't be palettized perceptually-losslessly -> lossless,
+  // which keeps far more than 256 colours.
+  const { data: dpx, info } = await sharp(data).raw().toBuffer({ resolveWithObject: true });
+  const colors = new Set();
+  for (let i = 0; i < dpx.length && colors.size <= 256; i += info.channels) {
+    colors.add((dpx[i] << 16) | (dpx[i + 1] << 8) | dpx[i + 2]);
+  }
+  assert.ok(colors.size > 256, 'gradient should be kept lossless, not palettized');
 });
 
 test('lossless PNG is pixel-identical to the source', async () => {

@@ -34,11 +34,11 @@ function losslessPng(rawBuf, info, cfg) {
     .toBuffer();
 }
 
-/** Lossy palette PNG via libimagequant (== pngquant engine). */
-function palettePng(rawBuf, info, cfg) {
+/** Lossy palette PNG via libimagequant (== pngquant engine), at a given quality. */
+function palettePngAt(rawBuf, info, cfg, quality) {
   return fromRaw(rawBuf, info, cfg)
     .png({
-      quality: cfg.pngQuality,
+      quality,
       palette: true,
       colours: cfg.pngColors,
       dither: cfg.pngDither,
@@ -95,22 +95,47 @@ export async function encodePng(rawBuf, info, cfg) {
   return { ...sharpResult, engine: 'sharp' };
 }
 
-/** Built-in libimagequant path with the SSIM quality gate. */
+/**
+ * Built-in libimagequant path. Perceptually-lossless palette search:
+ *   1. Encode at the top quality. If even that isn't perceptually lossless, the
+ *      image isn't palette-friendly (e.g. a gradient/photo) -> lossless.
+ *   2. Otherwise try lower qualities too and keep the SMALLEST FILE that still
+ *      clears the perceptual bar. Palette size is non-monotonic with quality
+ *      (dithering can make a lower quality LARGER), so we compare actual bytes
+ *      rather than assuming "lower quality == smaller", as the JPEG search does.
+ */
 async function encodePngSharp(rawBuf, info, cfg) {
   if (cfg.pngLossless) return { data: await losslessPng(rawBuf, info, cfg), mode: 'lossless', ssim: null };
 
-  const palette = await palettePng(rawBuf, info, cfg);
-  if (cfg.pngMinSsim > 0) {
-    const ref = toLuma(rawBuf, info.width, info.height, info.channels);
-    const score = await scoreVsSource(ref, info, palette, cfg);
-    if (score < cfg.pngMinSsim) {
-      // Too lossy — keep lossless (the never-inflate guard upstream caps it at
-      // the original size, exactly what 2.9's pngquant bail effectively did).
-      return { data: await losslessPng(rawBuf, info, cfg), mode: 'lossless-fallback', ssim: score };
-    }
-    return { data: palette, mode: 'palette', ssim: score };
+  const ref = toLuma(rawBuf, info.width, info.height, info.channels);
+  const score = (data) => scoreVsSource(ref, info, data, cfg);
+
+  // Gate disabled -> single best-quality palette, no search.
+  const ceil = Math.round(cfg.pngQuality);
+  if (cfg.pngMinSsim <= 0) {
+    const data = await palettePngAt(rawBuf, info, cfg, ceil);
+    return { data, mode: 'palette', ssim: null, quality: ceil };
   }
-  return { data: palette, mode: 'palette', ssim: null };
+
+  // 1) Top-quality palette decides palette-vs-lossless. SSIM rises with quality,
+  //    so if the best palette fails the bar, no lower one will either.
+  const top = await palettePngAt(rawBuf, info, cfg, ceil);
+  const topSsim = await score(top);
+  if (topSsim < cfg.pngMinSsim) {
+    return { data: await losslessPng(rawBuf, info, cfg), mode: 'lossless-fallback', ssim: topSsim };
+  }
+
+  // 2) Try a couple of lower qualities; keep the smallest file still >= the bar.
+  const candidates = [{ data: top, quality: ceil, ssim: topSsim }];
+  const floor = Math.min(Math.round(cfg.pngMinQuality), ceil);
+  const probes = [...new Set([Math.round((floor + ceil) / 2), floor])].filter((q) => q >= 1 && q < ceil);
+  for (const q of probes) {
+    const data = await palettePngAt(rawBuf, info, cfg, q);
+    const s = await score(data);
+    if (s >= cfg.pngMinSsim) candidates.push({ data, quality: q, ssim: s });
+  }
+  candidates.sort((a, b) => a.data.length - b.data.length);
+  return { ...candidates[0], mode: 'palette' };
 }
 
 /** Byte-exact parity: pipe a lossless PNG through the real pngquant binary. */
