@@ -154,6 +154,67 @@ AVIFs. Pair with `<picture>`:
 </picture>
 ```
 
+## Transform service (CMS plugin / Lambda backbone)
+
+Besides batch-optimizing folders, the tool exposes a **single-image transform
+API** for on-demand use (a CMS image transform, a build step, an upload hook).
+The same `runTransform()` core is reachable three ways — pick per host:
+
+| Transport | Command | Use |
+|---|---|---|
+| **CLI** (stdin→stdout JSON) | `process-images transform` | shell out from PHP/anything; needs Node on the box |
+| **HTTP daemon** | `process-images serve` | persistent, warm sharp; POST from localhost |
+| **AWS Lambda** | `lambda/transform.js` | hosts that can't run Node; same logic, Function URL |
+
+**Bytes in, bytes out — stateless and storage-agnostic.** The caller reads the
+source (from GCS, S3, local, a Craft `Fs`…) and writes the results; the service
+never touches storage. So it works with any backend, including the
+`craftcms/google-cloud` filesystem, with no integration.
+
+### Request / response contract
+
+```jsonc
+// request (image carried as base64 in the `image` field)
+{
+  "image": "<base64>",
+  "ops":    { "width": 800, "height": 600, "fit": "cover",
+              "focal": { "x": 0.3, "y": 0.6 }, "maxSize": 2560, "bg": "#fff" },
+  "format": "auto",                       // or jpeg|png|webp|avif|keep
+  "batch":  [ { "ops": { "width": 800 }, "format": "avif" },   // one source ->
+              { "ops": { "width": 800 }, "format": "webp" },   // many outputs
+              { "ops": { "width": 800 }, "format": "auto" } ], // (<picture>)
+  "defaults": { "perceptualTarget": 0.99, "formatPool": ["avif","webp","jpeg"] }
+}
+```
+```jsonc
+// response
+{ "ok": true, "outputs": [
+  { "format": "avif", "width": 800, "height": 533, "bytes": 1914,
+    "ssim": 0.997, "engine": "avif-lossy", "data": "<base64>" }
+]}
+```
+
+`fit` maps to the usual CMS modes: `cover` (crop), `inside`/`contain` (fit),
+`fill` (stretch). `focal` is `{x,y}` in 0..1 for a focal-point crop.
+
+### Run it
+
+```bash
+# one-shot, from a file (testing)
+process-images transform --in photo.jpg --ops '{"width":800}' --format auto --out out.avif
+
+# one-shot, JSON on stdin (the shell-out contract)
+echo '{"image":"...","ops":{"width":800},"format":"auto"}' | process-images transform
+
+# persistent daemon (warm), optional bearer token
+process-images serve --port 4111 --token "$PI_TOKEN"
+curl -s localhost:4111/transform -H "authorization: Bearer $PI_TOKEN" \
+  -d '{"image":"...","ops":{"width":800},"format":"auto"}'
+```
+
+The Lambda (`process-images/lambda/transform`) takes the identical JSON body via a
+Function URL / API Gateway v2 event and honors `PI_TOKEN`.
+
 ## Library usage
 
 ```js

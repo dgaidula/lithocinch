@@ -5,7 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.js",
-    "./lambda": "./lambda/handler.js"
+    "./transform": "./src/transform-api.js",
+    "./server": "./src/server.js",
+    "./lambda": "./lambda/handler.js",
+    "./lambda/transform": "./lambda/transform.js"
   },
   "main": "./src/index.js",
   "bin": {
@@ -26,6 +29,7 @@
   "scripts": {
     "start": "node src/cli.js",
     "optimize": "node src/cli.js",
+    "serve": "node src/cli.js serve",
     "test": "node --test",
     "lint": "node --check src/cli.js"
   },

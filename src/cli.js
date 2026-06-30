@@ -17,6 +17,15 @@ const pkg = JSON.parse(
   readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8')
 );
 
+// Sub-commands for the transform-API backends (CMS plugin / Lambda backbone) are
+// dispatched before the directory-optimize command so they don't get parsed as
+// an input path. `serve` = HTTP daemon, `transform` = one-shot stdin/stdout JSON.
+const sub = process.argv[2];
+if (sub === 'serve' || sub === 'transform') {
+  const { runSubcommand } = await import('./cli-service.js');
+  await runSubcommand(sub, process.argv.slice(3), pkg.version);
+} else {
+
 const program = new Command();
 
 program
@@ -312,3 +321,5 @@ function truncate(s, max = 40) {
 }
 
 program.parseAsync(process.argv);
+
+} // end of directory-optimize command (see the `serve`/`transform` dispatch above)

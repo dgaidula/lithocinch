@@ -282,6 +282,36 @@ same "smallest perceptually-lossless" policy.
 
 ---
 
+## 9b. Transform service — the integration backbone
+
+To drive the tool from a CMS (Craft), a build step, or any non-Node host, there's
+a single-image **transform API** layered over the same core (`src/transform-api.js`,
+`runTransform()`), reachable three ways that share one request/response contract:
+
+- **CLI** (`process-images transform`): JSON request on stdin → JSON (base64) on
+  stdout. The shell-out backend for hosts that have Node.
+- **HTTP daemon** (`process-images serve`, `src/server.js`): persistent, warm
+  sharp; `POST /transform`, `GET /health`, optional bearer token.
+- **Lambda** (`lambda/transform.js`): the identical handler behind a Function URL
+  — the backend for hosts that can't run Node.
+
+Design choices that matter for the integration:
+- **Bytes in, bytes out — stateless, storage-agnostic.** The caller owns storage
+  (Craft's `Fs` for GCS/S3/local), so the service needs *zero* storage
+  integration. Verified target: `craftcms/google-cloud` on Craft 5 — the plugin
+  reads source via `$asset->getFs()->read()` and writes variants back; the
+  service only ever sees pixels.
+- **Batch in one request** (multiple `ops`/`format` over one source) amortizes
+  Node startup / network and yields the whole `<picture>` set at once.
+- **Explicit transform resize** (`width`/`height`/`fit`/`position`/`focal`) was
+  added alongside the existing `maxSize` cap; `fit` maps to the CMS crop/fit/
+  stretch modes and `focal` does a focal-point cover crop.
+
+This is the shared contract the eventual Craft plugin's three backend drivers
+(`cli`/`daemon`/`remote`) target — speccing it here *is* speccing the Lambda API.
+
+---
+
 ## 10. Open questions / future work
 
 - ~~PNG perceptual search~~ — **shipped** (§2): byte-comparing palette-quality

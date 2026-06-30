@@ -80,19 +80,53 @@ function buildPipeline(input, meta, cfg, animated) {
   let pipeline = sharp(input, { failOn: 'none', animated });
   if (cfg.colorspace) pipeline = pipeline.toColorspace(cfg.colorspace);
 
-  const overMax =
-    cfg.maxSize > 0 && ((meta.width || 0) > cfg.maxSize || (meta.height || 0) > cfg.maxSize);
   let resized = false;
-  if (cfg.square && cfg.maxSize > 0) {
-    pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, { fit: 'contain', background: cfg.bgColor });
+  if (cfg.width || cfg.height) {
+    // Explicit transform resize (CMS / transform API). Takes precedence over maxSize.
+    pipeline = applyExplicitResize(pipeline, meta, cfg, animated);
     resized = true;
-  } else if (overMax) {
-    pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, { fit: 'inside', withoutEnlargement: true });
-    resized = true;
+  } else {
+    const overMax =
+      cfg.maxSize > 0 && ((meta.width || 0) > cfg.maxSize || (meta.height || 0) > cfg.maxSize);
+    if (cfg.square && cfg.maxSize > 0) {
+      pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, { fit: 'contain', background: cfg.bgColor });
+      resized = true;
+    } else if (overMax) {
+      pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, { fit: 'inside', withoutEnlargement: true });
+      resized = true;
+    }
   }
-  if (cfg.trim && !cfg.square) pipeline = pipeline.trim();
+  if (cfg.trim && !cfg.square && !(cfg.width || cfg.height)) pipeline = pipeline.trim();
   return { pipeline, resized };
 }
+
+/** Explicit width/height resize with fit/position, and focal-point crop for cover. */
+function applyExplicitResize(pipeline, meta, cfg, animated) {
+  const w = cfg.width || null;
+  const h = cfg.height || null;
+  const fit = cfg.fit || 'cover';
+  const withoutEnlargement = cfg.withoutEnlargement !== false;
+
+  // Focal-point crop: scale to cover the target, then extract a window centered
+  // on the focal point. Static images only (extract on animated strips is unsafe).
+  if (cfg.focal && fit === 'cover' && w && h && (meta.pages || 1) <= 1 && meta.width && meta.height) {
+    const scale = Math.max(w / meta.width, h / meta.height);
+    const sw = Math.max(w, Math.round(meta.width * scale));
+    const sh = Math.max(h, Math.round(meta.height * scale));
+    const fx = clamp01(cfg.focal.x ?? 0.5);
+    const fy = clamp01(cfg.focal.y ?? 0.5);
+    const left = Math.max(0, Math.min(sw - w, Math.round(fx * sw - w / 2)));
+    const top = Math.max(0, Math.min(sh - h, Math.round(fy * sh - h / 2)));
+    return pipeline.resize(sw, sh).extract({ left, top, width: w, height: h });
+  }
+
+  const opts = { fit, withoutEnlargement };
+  if (fit === 'cover' || fit === 'contain') opts.position = cfg.position || 'centre';
+  if (fit === 'contain') opts.background = cfg.bgColor;
+  return pipeline.resize(w, h, opts);
+}
+
+const clamp01 = (n) => Math.max(0, Math.min(1, Number(n)));
 
 // Compatibility rank for the animated tie-break (lower = more universal). GIF is
 // universal; animated WebP is broadly but not universally supported.

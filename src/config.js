@@ -22,6 +22,17 @@ export const DEFAULTS = Object.freeze({
   bgColor: { r: 255, g: 255, b: 255, alpha: 1 }, // was const bgColor (used by square)
   trim: false, // was const trimWhiteSpace
 
+  // Explicit transform resize (the CMS / transform-API path). When width and/or
+  // height is set these take precedence over maxSize. `fit` maps to Craft's modes
+  // (cover=crop, inside/contain=fit, fill=stretch). `focal` is {x,y} in 0..1 for
+  // a focal-point crop (cover, static images); `position` is a sharp gravity.
+  width: null,
+  height: null,
+  fit: 'cover',
+  position: 'centre',
+  focal: null,
+  withoutEnlargement: true,
+
   // ---- color ----
   // Everything is normalized to sRGB in-memory via sharp. This replaces the old
   // tmp-directory CMYK->RGB workaround entirely. `keepMetadata` re-embeds the

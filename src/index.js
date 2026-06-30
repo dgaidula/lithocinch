@@ -12,5 +12,7 @@ export { optimizeImageBuffer } from './optimize.js';
 export { optimizeSvg } from './svg.js';
 export { optimizeBytes, optimizeFile } from './transform.js';
 export { processDirectory } from './process-dir.js';
+export { runTransform, handleJsonRequest, serializeOutputs } from './transform-api.js';
+export { createServer, startServer } from './server.js';
 export { resolveConfig, DEFAULTS, parseColor, RASTER_EXTS, SVG_EXTS, OUTPUT_FORMATS } from './config.js';
 export { buildOutputName, extNoDot } from './naming.js';
