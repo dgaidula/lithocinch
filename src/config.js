@@ -52,7 +52,9 @@ export const DEFAULTS = Object.freeze({
   jpegRecompressIntermediate: 95, // quality of the intermediate JPEG fed to the binary
 
   // PNG: libimagequant palette quantization == 2.9's imagemin-pngquant.
-  pngEngine: 'sharp', // 'sharp' (built-in libimagequant, portable) | 'pngquant' (binary, exact 2.9 parity)
+  // 'auto' = shoot out sharp vs pngquant (when on PATH), keep the smallest that
+  // clears the quality gate. 'sharp' = portable/deterministic. 'pngquant' = exact 2.9.
+  pngEngine: 'auto', // 'auto' | 'sharp' | 'pngquant'
   pngQuality: 80, // libimagequant quality ceiling (2.9 used 50-60; 80 keeps more color = >= quality)
   pngEffort: 10, // libimagequant effort 1-10; 10 == pngquant speed:1 ("best", 2.9's choice)
   pngColors: 256, // max palette colors (pngquant default)
@@ -72,10 +74,14 @@ export const DEFAULTS = Object.freeze({
   webpQuality: 80,
   avifQuality: 50,
 
-  // GIF: sharp/libimagequant replacement for imagemin-gifsicle (2.9 defaults).
+  // GIF: sharp/libimagequant for colour+resize, then a LOSSLESS gifsicle pass.
+  // 'auto' = use gifsicle when on PATH (lossless, best for animations), else sharp.
+  gifEngine: 'auto', // 'auto' | 'sharp' | 'gifsicle'
   gifColors: 256,
   gifDither: 1.0,
-  gifEffort: 10, // 2.9's gifsicle used -O1; max effort here is equal-or-better for most GIFs
+  gifEffort: 10, // sharp palette effort (2.9's gifsicle used -O1)
+  gifsicleOptimize: 3, // gifsicle -O level (3 = max, lossless)
+  gifsicleLossy: 0, // gifsicle --lossy level; 0 = off (lossless). >0 trades quality for size
 
   effort: 4, // WebP/AVIF encoder effort (clamped per-codec); PNG/GIF use their own effort above
 

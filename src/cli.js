@@ -69,9 +69,9 @@ program
   .option('--no-jpeg-ssim-downsample', 'score SSIM at full resolution (slower, stricter)')
   .option('--jpeg-quality <n>', 'fixed-mode JPEG quality 1-100 (only with --jpeg-mode fixed)', '80')
   .addOption(
-    new Option('--png-engine <engine>', 'PNG engine: built-in libimagequant or the real pngquant binary')
-      .choices(['sharp', 'pngquant'])
-      .default('sharp')
+    new Option('--png-engine <engine>', 'PNG engine: auto shoots out sharp vs pngquant and keeps the smaller')
+      .choices(['auto', 'sharp', 'pngquant'])
+      .default('auto')
   )
   .option('--png-quality <n>', 'PNG palette quality 1-100 (libimagequant; 2.9 used ~60)', '80')
   .option('--png-effort <n>', 'PNG palette effort 1-10 (10 = pngquant speed:1, best)', '10')
@@ -79,7 +79,13 @@ program
   .option('--png-lossless', 'lossless PNG (no palette quantization, zlib only)', false)
   .option('--webp-quality <n>', 'WebP quality 1-100', '80')
   .option('--avif-quality <n>', 'AVIF quality 1-100', '50')
+  .addOption(
+    new Option('--gif-engine <engine>', 'GIF engine: auto adds a lossless gifsicle pass when available')
+      .choices(['auto', 'sharp', 'gifsicle'])
+      .default('auto')
+  )
   .option('--gif-colors <n>', 'max GIF palette colors', '256')
+  .option('--gif-lossy <n>', 'gifsicle lossy level (0 = lossless; higher = smaller/lossier)', '0')
   .option('--effort <n>', 'WebP/AVIF encoder effort (higher = slower/smaller)', '4')
   // --- svg ---
   .option('--svg-remove-viewbox', 'let svgo strip the viewBox attribute', false)
@@ -131,7 +137,9 @@ program.action(async (input, opts) => {
     pngLossless: opts.pngLossless,
     webpQuality: Number(opts.webpQuality),
     avifQuality: Number(opts.avifQuality),
+    gifEngine: opts.gifEngine,
     gifColors: Number(opts.gifColors),
+    gifsicleLossy: Number(opts.gifLossy),
     effort: Number(opts.effort),
     svgRemoveViewBox: opts.svgRemoveViewbox,
     svgMultipass: opts.svgMultipass, // false when --no-svg-multipass
@@ -175,7 +183,11 @@ program.action(async (input, opts) => {
         if (opts.verbose) {
           const q = evt.quality != null ? ` q${evt.quality}` : '';
           const s = evt.ssim != null ? ` ssim${evt.ssim.toFixed(4)}` : '';
-          logger.info(`${evt.file} -> ${evt.outFile} (${fmtBytes(evt.bytesIn)} -> ${fmtBytes(evt.bytesOut)}${q}${s})`);
+          // Only call out a specialist engine (pngquant/gifsicle/jpeg-recompress/
+          // passthrough); the built-in sharp paths are the unremarkable default.
+          const builtin = evt.engine === 'sharp' || evt.engine === 'sharp-ssim' || evt.engine === 'sharp-fixed';
+          const e = evt.engine && !builtin ? pc.cyan(` via ${evt.engine}`) : '';
+          logger.info(`${evt.file} -> ${evt.outFile} (${fmtBytes(evt.bytesIn)} -> ${fmtBytes(evt.bytesOut)}${q}${s})${e}`);
         }
         bar?.increment({ file: truncate(evt.file) });
         break;

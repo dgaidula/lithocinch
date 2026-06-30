@@ -32,6 +32,32 @@ export function runBinary(bin, args, input) {
   });
 }
 
+// Is a binary available on PATH? Cached per process so the `auto` engines can
+// probe once and reuse the answer across every file in a run.
+const availability = new Map();
+export function hasBinary(bin) {
+  if (!availability.has(bin)) {
+    availability.set(
+      bin,
+      new Promise((resolve) => {
+        let child;
+        try {
+          child = spawn(bin, ['--version']);
+        } catch {
+          return resolve(false);
+        }
+        child.on('error', () => resolve(false));
+        child.stdout?.resume();
+        child.stderr?.resume();
+        // Any clean spawn that reaches 'close' means the binary exists (even if
+        // --version returns non-zero on some tools).
+        child.on('close', () => resolve(true));
+      })
+    );
+  }
+  return availability.get(bin);
+}
+
 export function binHint(bin, err) {
   if (err && err.code === 'ENOENT') {
     const install =

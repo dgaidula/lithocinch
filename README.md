@@ -84,7 +84,8 @@ process-images ./photos --dry-run --verbose
 | `--jpeg-quality <n>` | `80` | Fixed JPEG quality (only with `--jpeg-mode fixed`) |
 | `--png-quality <n>` | `80` | PNG palette quality (libimagequant) |
 | `--png-min-ssim <n>` | `0.85` | Fall back to lossless if a palette PNG scores below this SSIM |
-| `--png-engine <e>` | `sharp` | `sharp` (libimagequant) or `pngquant` (binary, exact 2.9 parity) |
+| `--png-engine <e>` | `auto` | `auto` (shootout) / `sharp` (libimagequant) / `pngquant` (binary) |
+| `--gif-engine <e>` | `auto` | `auto` (lossless gifsicle pass when available) / `sharp` / `gifsicle` |
 | `--overwrite` | off | Reprocess even if output already exists |
 | `--flatten` | off | Write output flat instead of mirroring subfolders |
 | `--no-copy-non-images` | — | Don't copy non-image files through |
@@ -197,9 +198,19 @@ fixed --jpeg-quality 80` switches to a plain single-quality encode. See
   drop quality too far, it keeps a lossless encoding instead — the portable
   equivalent of pngquant's min-quality "bail". `--png-engine pngquant` shells out
   to the real binary for byte-exact 2.9 parity; `--png-lossless` forces lossless.
-- **GIF** uses sharp's libimagequant GIF encoder (equal-or-better than 2.9's
-  gifsicle for static GIFs; gifsicle still wins on complex animations).
+- **GIF** uses sharp (libimagequant) for pixels, then a lossless `gifsicle -O3`
+  pass. `--gif-engine auto` (default) runs gifsicle when it's installed — best
+  for animations — and falls back to sharp otherwise.
 - **SVG** uses **svgo v4** (`preset-default` + multipass, viewBox preserved).
+
+### Opinionated `auto` engines
+
+By default PNG and GIF use `auto`: the tool uses the best encoder actually
+available and keeps the **tightest result that still passes the quality bar**.
+With `pngquant`/`gifsicle` installed, tiny PNGs and animated GIFs get the
+specialist tools automatically; without them it falls back to the portable
+built-ins. `--verbose` shows which engine won each file (`... via pngquant`).
+Pin `--png-engine sharp` / `--gif-engine sharp` for byte-stable portable output.
 
 See [NOTES.md §1f](./NOTES.md) for the head-to-head audit (sizes + SSIM) against
 the actual pngquant/gifsicle binaries.

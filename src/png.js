@@ -15,7 +15,7 @@
 import sharp from 'sharp';
 
 import { ssim, toLuma } from './ssim.js';
-import { runBinary } from './bin.js';
+import { runBinary, hasBinary, binHint } from './bin.js';
 
 const clampPngEffort = (v) => Math.min(10, Math.max(1, Math.round(v)));
 
@@ -48,22 +48,61 @@ function palettePng(rawBuf, info, cfg) {
     .toBuffer();
 }
 
+/** SSIM of an encoded PNG vs the source raw luma (1.0 == identical). */
+async function scoreVsSource(refLuma, info, encoded, cfg) {
+  const dec = await sharp(encoded).raw().toBuffer({ resolveWithObject: true });
+  const got = toLuma(dec.data, dec.info.width, dec.info.height, dec.info.channels);
+  return ssim(refLuma, got, info.width, info.height, { downsample: cfg.pngSsimDownsample });
+}
+
 /**
  * Encode a PNG from raw pixels.
- * @returns {Promise<{ data: Buffer, mode: string, ssim: number|null }>}
+ *
+ *  - 'sharp'    : built-in libimagequant palette, with the SSIM quality gate.
+ *  - 'pngquant' : byte-exact parity via the real pngquant binary.
+ *  - 'auto'     : run sharp AND (if pngquant is on PATH) pngquant, then keep the
+ *                 SMALLEST output that still clears the SSIM quality bar — the
+ *                 opinionated "tightest at acceptable quality" choice.
+ *
+ * @returns {Promise<{ data: Buffer, mode: string, ssim: number|null, engine: string }>}
  */
 export async function encodePng(rawBuf, info, cfg) {
-  if (cfg.pngEngine === 'pngquant') return encodePngBinary(rawBuf, info, cfg);
+  // Lossless is an explicit quality choice — never shoot it out against a lossy
+  // palette engine, regardless of pngEngine.
+  if (cfg.pngLossless) {
+    return { data: await losslessPng(rawBuf, info, cfg), mode: 'lossless', ssim: null, engine: 'sharp' };
+  }
+  if (cfg.pngEngine === 'pngquant') {
+    const r = await encodePngBinary(rawBuf, info, cfg);
+    return { ...r, engine: 'pngquant' };
+  }
+
+  const sharpResult = await encodePngSharp(rawBuf, info, cfg);
+  if (cfg.pngEngine === 'sharp' || !(await hasBinary('pngquant'))) {
+    return { ...sharpResult, engine: 'sharp' };
+  }
+
+  // auto shootout: compare sharp's (already quality-safe) result against pngquant.
+  const refLuma = toLuma(rawBuf, info.width, info.height, info.channels);
+  const pq = await encodePngBinary(rawBuf, info, cfg);
+  // pngquant's lossless-bail meets the bar by definition; otherwise gate it.
+  const pqOk =
+    pq.mode === 'lossless-bail' || (await scoreVsSource(refLuma, info, pq.data, cfg)) >= cfg.pngMinSsim;
+
+  if (pqOk && pq.data.length < sharpResult.data.length) {
+    return { ...pq, engine: 'pngquant' };
+  }
+  return { ...sharpResult, engine: 'sharp' };
+}
+
+/** Built-in libimagequant path with the SSIM quality gate. */
+async function encodePngSharp(rawBuf, info, cfg) {
   if (cfg.pngLossless) return { data: await losslessPng(rawBuf, info, cfg), mode: 'lossless', ssim: null };
 
   const palette = await palettePng(rawBuf, info, cfg);
-
-  // Quality gate: refuse a palette that's perceptually too far from the source.
   if (cfg.pngMinSsim > 0) {
     const ref = toLuma(rawBuf, info.width, info.height, info.channels);
-    const dec = await sharp(palette).raw().toBuffer({ resolveWithObject: true });
-    const got = toLuma(dec.data, dec.info.width, dec.info.height, dec.info.channels);
-    const score = ssim(ref, got, info.width, info.height, { downsample: cfg.pngSsimDownsample });
+    const score = await scoreVsSource(ref, info, palette, cfg);
     if (score < cfg.pngMinSsim) {
       // Too lossy — keep lossless (the never-inflate guard upstream caps it at
       // the original size, exactly what 2.9's pngquant bail effectively did).

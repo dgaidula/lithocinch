@@ -40,7 +40,7 @@ export async function optimizeBytes(bytes, filename, options = {}) {
     throw new Error(`Unsupported image extension: ".${ext}" (${filename})`);
   }
 
-  const { data, inputFormat, outputFormat, quality, ssim } = await optimizeImageBuffer(
+  const { data, inputFormat, outputFormat, quality, ssim, engine } = await optimizeImageBuffer(
     Buffer.from(bytes),
     { ...cfg, __resolved: true }
   );
@@ -52,6 +52,7 @@ export async function optimizeBytes(bytes, filename, options = {}) {
     outputFormat,
     quality,
     ssim,
+    engine,
     outName: buildOutputName(filename, {
       suffix: cfg.suffix,
       outputFormat: formatChanged ? outputFormat : null,

@@ -17,6 +17,7 @@ import sharp from 'sharp';
 import { resolveConfig } from './config.js';
 import { encodeJpeg } from './jpeg.js';
 import { encodePng } from './png.js';
+import { finalizeGif } from './gif.js';
 
 const EFFORT_RANGE = {
   png: [1, 10],
@@ -91,10 +92,23 @@ function buildPipeline(input, meta, cfg, animated) {
 /** Direct encode path for animated GIF/WebP (no raw round-trip, no SSIM search). */
 async function optimizeAnimated(input, meta, cfg, format, resized, pipeline) {
   if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ icc: 'srgb' });
-  if (format === 'webp') pipeline = pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') });
-  else pipeline = pipeline.gif({ colours: cfg.gifColors });
-  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
-  return { data, info, inputFormat: meta.format, outputFormat: format, resized, quality: null };
+  if (format === 'webp') {
+    pipeline = pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') });
+    const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
+    return { data, info, inputFormat: meta.format, outputFormat: format, resized, quality: null, engine: 'sharp' };
+  }
+  pipeline = pipeline.gif({ colours: cfg.gifColors, dither: cfg.gifDither, effort: Math.min(10, Math.max(1, cfg.gifEffort)) });
+  const sharpGif = await pipeline.toBuffer();
+  const g = await finalizeGif(sharpGif, cfg); // lossless gifsicle pass (auto)
+  return {
+    data: g.data,
+    info: { format: 'gif', width: meta.width, height: meta.height, size: g.data.length },
+    inputFormat: meta.format,
+    outputFormat: format,
+    resized,
+    quality: null,
+    engine: g.engine,
+  };
 }
 
 /**
@@ -151,11 +165,20 @@ export async function optimizeImageBuffer(input, options = {}) {
   let data;
   let info;
   let quality = null;
+  let engine = 'sharp';
   if (format === 'png') {
     const r = await encodePng(rawBuf, rawInfo, cfg);
     data = r.data;
+    engine = r.engine;
     const m = await sharp(data).metadata();
     info = { format: 'png', width: m.width, height: m.height, size: data.length };
+  } else if (format === 'gif') {
+    const sharpGif = (await encodeRawNonJpeg(rawBuf, rawInfo, 'gif', cfg)).data;
+    const g = await finalizeGif(sharpGif, cfg);
+    data = g.data;
+    engine = g.engine;
+    const m = await sharp(data).metadata();
+    info = { format: 'gif', width: m.width, height: m.height, size: data.length };
   } else {
     ({ data, info } = await encodeRawNonJpeg(rawBuf, rawInfo, format, cfg));
   }
@@ -175,5 +198,5 @@ export async function optimizeImageBuffer(input, options = {}) {
     };
   }
 
-  return { data, info, inputFormat, outputFormat: format, resized, quality };
+  return { data, info, inputFormat, outputFormat: format, resized, quality, engine };
 }

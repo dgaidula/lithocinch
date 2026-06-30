@@ -88,20 +88,20 @@ binaries (output size **and** measured SSIM), not assumed.
   caps the lossless fallback at the original size.
 - For **byte-exact parity**, `--png-engine pngquant` shells out to the real
   binary with 2.9's exact `--quality 50-60 --speed 1`.
-- **Known size caveat (not quality):** for very small/flat PNGs, libvips emits a
-  chunkier file than pngquant (e.g. a flat logo: 594 B vs 195 B) — *identical
-  quality* (both lossless-equivalent), just less byte-optimal. `--png-engine
-  pngquant` gets the smaller bytes. Quality is never worse; only these tiny files
-  are larger.
+- **The default is actually `auto`** (see §1g): it runs both sharp and pngquant
+  and keeps the smaller quality-passing result. That closes the one size gap —
+  libvips emits a chunkier file than pngquant on tiny/flat PNGs (a flat logo:
+  594 B sharp → **195 B** via pngquant, identical quality), and `auto` picks the
+  195 B automatically when pngquant is installed.
 
 **GIF** — 2.9 used `imageminGifsicle()` (default `-O1`, lossless). 3.x uses
-sharp's libimagequant GIF encoder at max effort + 256 colors + dither. For static
-GIFs this is equal-or-better; for **complex animations gifsicle can still pack
-frames tighter** (its inter-frame diffing is best-in-class). GIF is rare in this
-workflow (the 2.9 comments are all about WordPress JP/PNG trees), so sharp's
-encoder is the pragmatic default. If you have animation-heavy GIFs that matter,
-keep running them through gifsicle — say the word and I'll add a `--gif-engine
-gifsicle` shell-out mirroring the png/jpeg ones.
+sharp's libimagequant GIF encoder for colour/resize/quantization, then a
+**lossless `gifsicle -O3` pass** (best-in-class LZW + inter-frame optimization,
+especially for animations). The default `--gif-engine auto` runs the gifsicle
+pass whenever the binary is on PATH (it can only shrink or tie — never reduce
+quality), falling back to sharp-only when it isn't. `--gif-engine sharp` forces
+the portable path; `--gif-engine gifsicle` requires the binary. Opt-in
+`--gif-lossy <n>` enables gifsicle's lossy LZW for extra savings.
 
 **SVG** — 2.9 used `imageminSvgo({ multipass:true, removeViewBox:false })` on an
 old svgo (v2/3, bundled by imagemin-svgo). 3.x calls **svgo v4 directly** with
@@ -109,6 +109,29 @@ old svgo (v2/3, bundled by imagemin-svgo). 3.x calls **svgo v4 directly** with
 safer (it *removed* the historically-risky `removeViewBox` from the default set),
 so output is equal-or-better and the intent (full optimization, keep viewBox,
 multipass) is matched exactly.
+
+### g. Opinionated `auto` engines — tightest file at acceptable quality
+The default engine for PNG and GIF is `auto`: use the best tool actually
+available, fall back gracefully when it isn't, and never accept a quality
+regression. This makes the tool adapt to the machine it runs on without config.
+
+- **PNG `auto`** runs *both* the built-in libimagequant path (with its SSIM
+  gate) and the real `pngquant` (when on PATH), measures SSIM on the pngquant
+  candidate, and keeps the **smaller output that still clears the quality bar**.
+  In practice: tiny/flat PNGs go to pngquant (libvips is a bit chunky there —
+  e.g. a logo 594 B → 195 B), hard images stay on sharp's gated lossless. Result
+  is the tightest of the two at equal-or-better quality.
+- **GIF `auto`** post-processes sharp's GIF through `gifsicle -O3` (lossless) when
+  available, keeping it only if smaller.
+- **Determinism trade-off:** because `auto` adapts to installed binaries, output
+  can differ between a dev machine (pngquant/gifsicle present) and a bare Lambda.
+  Both are good; pin `--png-engine sharp` / `--gif-engine sharp` for byte-stable,
+  portable output, or the binary engines for byte-exact 2.9 parity. The CLI
+  prints which engine won per file under `--verbose` (`... via pngquant`).
+- **JPEG stays on `sharp-ssim` by default** (not `auto`): the built-in adaptive
+  search already reproduces jpeg-recompress faithfully, and a JPEG shootout would
+  double the most expensive operation in the pipeline. `--jpeg-engine
+  jpeg-recompress` is there when you want byte-exact parity.
 
 ### b. ESM, not CommonJS
 `"type": "module"`. This is what lets us use current `svgo`, and it's the modern
@@ -175,8 +198,8 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `imageminPngquant({quality})` | `[0.5,0.6]` | `--png-quality` | `pngQuality` | libimagequant is the same engine pngquant wraps. Single 0–100 ceiling now; **default raised to 80** (≥ 2.9's 50–60 = equal-or-better quality). See §1f |
 | `imageminPngquant({speed})` | `1` | `--png-effort` | `pngEffort` | pngquant speed:1 ("best") == libimagequant effort 10, the new default |
 | *(pngquant min-quality bail)* | implicit | `--png-min-ssim` | `pngMinSsim` | portable replacement for pngquant's "keep lossless if too lossy"; default 0.85. See §1f |
-| *(png engine)* | pngquant | `--png-engine` | `pngEngine` | `sharp` (default, libimagequant) or `pngquant` (real binary, exact parity) |
-| `imageminGifsicle()` | defaults (`-O1`) | `--gif-colors` | `gifColors` | now sharp/libimagequant (max effort); see §1f for the gifsicle trade-off |
+| *(png engine)* | pngquant | `--png-engine` | `pngEngine` | **`auto`** (default; shoots out sharp vs pngquant, keeps smaller quality-passing), `sharp`, or `pngquant` (exact parity). See §1g |
+| `imageminGifsicle()` | defaults (`-O1`) | `--gif-engine` | `gifEngine` | **`auto`** (default; sharp + lossless `gifsicle -O3` when available), `sharp`, or `gifsicle`. See §1f/§1g |
 | `imageminSvgo({multipass})` | `true` | `--no-svg-multipass` | `svgMultipass` | svgo upgraded v2/3 → **v4**; see §1f |
 | svgo `removeViewBox:false` | keep | `--svg-remove-viewbox` | `svgRemoveViewBox` | svgo v4 keeps viewBox by default already |
 | — (new) | — | `--webp-quality` | `webpQuality` | |
