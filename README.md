@@ -76,7 +76,8 @@ process-images ./photos --dry-run --verbose
 | `-o, --output <dir>` | `../img-optimize-output/` | Output directory |
 | `-s, --suffix <str>` | `_opt` | Inserted before each file's extension |
 | `-m, --max-size <px>` | `2560` | Cap width & height (`0` / `--no-resize` to disable) |
-| `-f, --format <fmt>` | *keep* | Force output to `jpeg`/`png`/`webp`/`avif`/`gif`/`tiff` |
+| `-f, --format <fmt>` | *keep* | `jpeg`/`png`/`webp`/`avif`/`gif`/`tiff`, or **`auto`** (smallest per image) |
+| `--manifest <path>` | — | JSON `source → output` map; enables `--format auto` skip-detection |
 | `--webp-mode <m>` | `auto` | `auto` (classify + shoot out), `lossy`, `lossless`, `near-lossless` |
 | `--emit <formats>` | — | Also write sibling formats (e.g. `webp,avif`) for `<picture>` |
 | `--square` | off | Pad to a `max-size` square using `--bg-color` |
@@ -98,6 +99,35 @@ process-images ./photos --dry-run --verbose
 Run `process-images --help` for the complete list (color, trim, metadata, AVIF,
 SVG, error-dir, etc.). Every option also exists as a library option key — see
 the mapping table in [NOTES.md](./NOTES.md).
+
+## Auto-pick the best format (`--format auto`)
+
+Let the tool choose the smallest format for each image — it encodes the viable
+candidates and ships the winner, changing the extension to match:
+
+```bash
+process-images ./images --format auto --manifest ./out/manifest.json
+```
+
+```
+photographic.png  1.27 MB  ->  4.3 KB   .avif   (no longer a bloated PNG)
+logo.png          11 KB    ->  64 B     .webp   (lossless)
+photo.jpg         700 KB   ->  7.4 KB   .avif
+icon-with-alpha   ...      ->  .webp            (alpha preserved; JPEG excluded)
+```
+
+- **Photographic PNGs stop being PNGs** — they convert to AVIF/WebP automatically.
+- **Tie-break favors compatibility:** when two formats are within
+  `--format-tolerance` (default 3%), the more universally-supported one wins, so a
+  trivial AVIF edge doesn't rewrite every URL to `.avif`.
+- **Restrict the pool** for conservative targets: `--format-pool webp,jpeg,png`
+  drops AVIF.
+- **The manifest matters.** Because extensions change, `--manifest` records
+  `source → output, format, bytes` for every file — feed it to your build/HTML
+  rewrite, and re-runs use it to skip already-done files. Pair with `--emit` to
+  also write guaranteed fallbacks.
+
+See [RESEARCH.md §9](./RESEARCH.md) for the candidate-pool and tie-break rules.
 
 ## Emit `<picture>` fallbacks alongside originals
 

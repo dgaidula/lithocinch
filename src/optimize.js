@@ -20,6 +20,7 @@ import { encodePng } from './png.js';
 import { encodeWebp } from './webp.js';
 import { encodeAvif } from './avif.js';
 import { finalizeGif } from './gif.js';
+import { pickBestFormat } from './best-format.js';
 
 const EFFORT_RANGE = {
   png: [1, 10],
@@ -141,7 +142,11 @@ export async function optimizeImageBuffer(input, options = {}) {
   const meta = await sharp(inputBuf, { failOn: 'none' }).metadata();
   const inputFormat = meta.format || 'unknown';
   const isAnimated = (meta.pages || 1) > 1 && (inputFormat === 'gif' || inputFormat === 'webp');
-  const format = targetFormat(inputFormat, cfg);
+  // `--format auto` picks the best format per image. Animated auto -> WebP
+  // (animated WebP reliably beats GIF); static auto runs the candidate shootout.
+  const autoStatic = cfg.format === 'auto' && !isAnimated;
+  const format =
+    cfg.format === 'auto' ? (isAnimated ? 'webp' : 'auto') : targetFormat(inputFormat, cfg);
   const keepAnimation = isAnimated && (format === 'gif' || format === 'webp');
 
   const { pipeline, resized } = buildPipeline(inputBuf, meta, cfg, keepAnimation);
@@ -161,6 +166,22 @@ export async function optimizeImageBuffer(input, options = {}) {
   // Decode to raw pixels once, so the JPEG quality search can re-encode many
   // candidates without redoing resize/colour each time.
   const { data: rawBuf, info: rawInfo } = await prepared.raw().toBuffer({ resolveWithObject: true });
+
+  if (autoStatic) {
+    const ctx = { inputFormat, inputBytes: inputBuf.length, inputBuffer: inputBuf, transformed };
+    const r = await pickBestFormat(rawBuf, rawInfo, cfg, ctx);
+    const m = await sharp(r.data).metadata();
+    return {
+      data: r.data,
+      info: { format: r.outputFormat, width: m.width, height: m.height, size: r.data.length },
+      inputFormat,
+      outputFormat: r.outputFormat,
+      resized,
+      quality: null,
+      ssim: r.ssim ?? null,
+      engine: r.engine,
+    };
+  }
 
   if (format === 'jpeg') {
     const ctx = { inputBytes: inputBuf.length, inputFormat, inputBuffer: inputBuf, transformed };

@@ -224,15 +224,55 @@ prints the winning engine per file under `--verbose` (e.g. `... via pngquant`).
 
 ---
 
-## 9. Open questions / future work
+## 9. Auto-pick output format (`--format auto`)
+
+The opinionated extreme: encode each image in every viable format and ship the
+smallest. Reuses the single raw decode and the per-codec content-aware encoders,
+so it's "run N encoders on shared pixels, compare, pick" (`src/best-format.js`).
+
+- **Candidate pool**, pruned before encoding to control cost: photographic →
+  `{avif, webp, jpeg}`; graphic/flat → `{webp, png, avif}`; **alpha ⇒ JPEG
+  dropped** (no transparency); intersected with `--format-pool`
+  (default `avif,webp,jpeg,png`). The untouched original is always a candidate
+  (never inflate).
+- **Three settled decisions:**
+  1. **JPEG competes only if it clears the perceptual bar.** It's band-clamped
+     (30–60) and rarely wins; pruning it when it can't reach the target is clean.
+     (Goal is smaller files — the user's call.)
+  2. **Tie-break = most compatible.** Among candidates within `--format-tolerance`
+     (default 3%) of the smallest, the more universally-supported format wins
+     (rank jpeg/png/gif < webp < avif). Stops a 2% AVIF edge from churning every
+     URL to `.avif`, and keeps photographic content off PNG.
+  3. **AVIF is in the default pool** (best ratios; ~5% browser gap covered by
+     pairing with `--emit` fallbacks).
+- **Measured** (`--format auto`): photographic PNG **1.27 MB → 4.3 KB AVIF**
+  (the "photo-as-PNG" annoyance, fixed); flat graphic → WebP-lossless; alpha
+  graphic → WebP (alpha preserved); JPEG photo → AVIF.
+- **The manifest is essential** because extensions change. `--manifest out.json`
+  records `input → output, format, bytes` for every file (primary + emitted), so
+  build tools / HTML rewriting know `hero.jpg` became `hero_opt.avif`. Re-runs
+  read it for **skip-detection** (the output name can't be predicted from the
+  input under `auto`, unlike fixed formats). Without a manifest, `auto`
+  reprocesses every run.
+- **Cost:** 2–4 candidate encodes per image (each a small SSIM search); classify
+  pruning keeps most to ~2; one shared decode; `--concurrency` parallelizes
+  across files. Heavier than fixed-format — the manifest cache makes re-runs free.
+
+---
+
+## 10. Open questions / future work
 
 - ~~PNG perceptual search~~ — **shipped** (§2): byte-comparing palette-quality
   search with a 0.92 perceptual gate and lossless fallback.
 - ~~"Also emit" mode~~ — **shipped**: `--emit webp,avif` writes siblings next to
   each raster for `<picture>` fallbacks; de-dups the primary format, fills in
   missing siblings on re-runs, skips SVG.
-- **Auto-pick output format:** opinionated "ship whichever format is smallest at
-  the perceptual target" — gated behind a flag because it changes extensions.
+- ~~Auto-pick output format~~ — **shipped** (§9): `--format auto` + manifest.
+- **Cross-format SSIM consistency:** candidates are scored with each codec's own
+  SSIM downsample setting; a uniform re-score would make the perceptual filter
+  exact (currently lossless candidates are normalized to 1.0, which is enough).
+- **Animated auto** currently maps to WebP; a true animated-WebP-vs-GIF shootout
+  could squeeze a bit more.
 - **AVIF/WebP for graphics with alpha:** verify near-lossless vs lossless choice
   on UI assets with transparency.
 - **Perceptual metric:** SSIM under-rates dithering and over-rates some blur;

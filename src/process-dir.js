@@ -60,6 +60,11 @@ export async function processDirectory(options = {}, hooks = {}) {
   const outputRoot = path.resolve(cfg.output);
   const errorRoot = path.resolve(cfg.errorDir);
 
+  // Manifest: prior run (for --format auto skip-detection) + entries collected now.
+  const manifestPath = cfg.manifest ? path.resolve(cfg.manifest) : null;
+  const priorManifest = manifestPath ? await loadManifest(manifestPath) : new Map();
+  const manifestEntries = [];
+
   const stats = {
     processed: 0,
     skipped: 0,
@@ -126,9 +131,17 @@ export async function processDirectory(options = {}, hooks = {}) {
     const getBytes = async () => (bytes ??= await fs.readFile(job.srcAbs));
 
     // --- primary output ---
-    const primaryNeeded = cfg.overwrite || !(await exists(job.previewOut));
+    // For --format auto the output extension isn't known up front, so skip-detect
+    // via the prior manifest; otherwise the predicted previewOut path is enough.
+    const prior = priorManifest.get(job.rel);
+    const primaryExists =
+      cfg.format === 'auto'
+        ? prior && (await exists(path.join(outputRoot, prior.output)))
+        : await exists(job.previewOut);
+    const primaryNeeded = cfg.overwrite || !primaryExists;
     if (!primaryNeeded) {
       stats.skipped++;
+      if (prior) manifestEntries.push(prior); // carry the prior entry forward
       onProgress({ type: 'skip', file: job.rel });
     } else {
       try {
@@ -147,11 +160,19 @@ export async function processDirectory(options = {}, hooks = {}) {
         stats.processed++;
         stats.bytesIn += bytes.length;
         stats.bytesOut += result.data.length;
+        manifestEntries.push({
+          input: job.rel,
+          output: relOut,
+          format: result.outputFormat ?? result.kind,
+          bytesIn: bytes.length,
+          bytesOut: result.data.length,
+        });
         onProgress({
           type: 'done',
           file: job.rel,
           outFile: relOut,
           kind: result.kind,
+          outputFormat: result.outputFormat ?? null,
           quality: result.quality ?? null,
           ssim: result.ssim ?? null,
           engine: result.engine ?? null,
@@ -185,6 +206,7 @@ export async function processDirectory(options = {}, hooks = {}) {
           }
           stats.emitted++;
           stats.emittedBytes += sib.data.length;
+          manifestEntries.push({ input: job.rel, output: sibRel, format: fmt, bytesOut: sib.data.length, emitted: true });
           onProgress({ type: 'emit', file: job.rel, outFile: sibRel, format: fmt, engine: sib.engine ?? null, bytesOut: sib.data.length });
         } catch (err) {
           log.error(`[emit ${fmt}] ${job.rel}: ${err.message}`);
@@ -215,8 +237,30 @@ export async function processDirectory(options = {}, hooks = {}) {
     onProgress({ type: 'copied', count: copied });
   }
 
+  // Write the manifest (sorted for stable diffs).
+  if (manifestPath && !cfg.dryRun) {
+    manifestEntries.sort((a, b) => a.input.localeCompare(b.input) || a.output.localeCompare(b.output));
+    await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+    await fs.writeFile(manifestPath, JSON.stringify({ version: 1, entries: manifestEntries }, null, 2) + '\n');
+    log.info(`Wrote manifest: ${manifestPath} (${manifestEntries.length} entries)`);
+  }
+
   onProgress({ type: 'complete', stats });
   return stats;
+}
+
+/** Load a prior manifest into a Map of input-rel -> primary entry (for skip-detection). */
+async function loadManifest(manifestPath) {
+  const map = new Map();
+  try {
+    const json = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    for (const e of json.entries || []) {
+      if (!e.emitted && !map.has(e.input)) map.set(e.input, e);
+    }
+  } catch {
+    // no/invalid prior manifest -> empty (process everything)
+  }
+  return map;
 }
 
 /** Copy non-image files (and optionally .bak files) into the output tree. */

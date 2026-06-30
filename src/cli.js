@@ -45,11 +45,15 @@ program
   .option('--keep-metadata', 're-embed sRGB ICC profile + EXIF instead of stripping', false)
   // --- format / quality ---
   .addOption(
-    new Option('-f, --format <fmt>', 'force all output to one format').choices([
+    new Option('-f, --format <fmt>', 'output format; "auto" picks the smallest per image').choices([
       ...OUTPUT_FORMATS,
+      'auto',
       'keep',
     ])
   )
+  .option('--format-pool <list>', 'candidate formats for --format auto (e.g. "webp,jpeg" to drop avif)', 'avif,webp,jpeg,png')
+  .option('--format-tolerance <n>', 'for --format auto, prefer a more-compatible format within this size fraction', '0.03')
+  .option('--manifest <path>', 'write a JSON map of source -> output(s); enables skip-detection for --format auto')
   .option('--no-tiff-to-jpeg', 'do NOT convert TIFF (incl. mislabeled .jpg TIFFs) to JPEG')
   .option('--no-mozjpeg', 'disable mozjpeg trellis quantization (faster, slightly larger)')
   // JPEG adaptive compression (the jpeg-recompress replacement)
@@ -145,6 +149,9 @@ program.action(async (input, opts) => {
     trim: opts.trim,
     keepMetadata: opts.keepMetadata,
     format: opts.format ?? null,
+    formatPool: opts.formatPool ? opts.formatPool.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+    formatTolerance: Number(opts.formatTolerance),
+    manifest: opts.manifest ?? null,
     tiffToJpeg: opts.tiffToJpeg, // false when --no-tiff-to-jpeg
     mozjpeg: opts.mozjpeg, // false when --no-mozjpeg
     jpegMode: opts.jpegMode,

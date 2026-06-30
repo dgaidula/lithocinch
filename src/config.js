@@ -30,7 +30,11 @@ export const DEFAULTS = Object.freeze({
   keepMetadata: false,
 
   // ---- format / encoders ----
-  format: null, // null = keep input format; or 'jpeg'|'png'|'webp'|'avif'|'gif'|'tiff'
+  format: null, // null = keep; 'jpeg'|'png'|'webp'|'avif'|'gif'|'tiff'; or 'auto' (pick best per image)
+  // --format auto: candidate pool (most-compatible first) and the tie-break
+  // tolerance — a more-compatible format within this fraction of the smallest wins.
+  formatPool: ['avif', 'webp', 'jpeg', 'png'],
+  formatTolerance: 0.03,
   tiffToJpeg: true, // was const convertTiffJpeg
   mozjpeg: true, // was const useMozJpeg (mozjpeg trellis quantization, built into libvips/sharp)
 
@@ -138,6 +142,11 @@ export const DEFAULTS = Object.freeze({
   // that already equals the primary output.
   emit: [],
 
+  // Path to write a JSON manifest mapping each source to its output(s) + format
+  // + sizes. Essential for --format auto (extensions change): build tools / HTML
+  // rewriting read it, and re-runs use it for skip-detection. null = no manifest.
+  manifest: null,
+
   // ---- runtime ----
   concurrency: 16, // replaces batchLimit/svgBatchLimit; in-memory buffers, no crash-batching needed
   dryRun: false, // NEW: report what would happen, write nothing
@@ -164,12 +173,26 @@ export function resolveConfig(opts = {}) {
     if (cfg.format === 'jpg') cfg.format = 'jpeg';
     if (cfg.format === 'tif') cfg.format = 'tiff';
     if (cfg.format === 'keep' || cfg.format === 'original') cfg.format = null;
-    if (cfg.format && !OUTPUT_FORMATS.includes(cfg.format)) {
+    // 'auto' is a mode (pick best per image), not a concrete format.
+    if (cfg.format && cfg.format !== 'auto' && !OUTPUT_FORMATS.includes(cfg.format)) {
       throw new Error(
-        `Invalid --format "${cfg.format}". Expected one of: ${OUTPUT_FORMATS.join(', ')}`
+        `Invalid --format "${cfg.format}". Expected: ${OUTPUT_FORMATS.join(', ')}, auto`
       );
     }
   }
+
+  // Candidate pool for --format auto (normalize aliases, validate, default order).
+  if (cfg.formatPool && cfg.formatPool.length) {
+    cfg.formatPool = cfg.formatPool.map((f) => {
+      let fmt = String(f).toLowerCase().trim();
+      if (fmt === 'jpg') fmt = 'jpeg';
+      if (!['avif', 'webp', 'jpeg', 'png'].includes(fmt)) {
+        throw new Error(`Invalid --format-pool entry "${f}". Expected: avif, webp, jpeg, png`);
+      }
+      return fmt;
+    });
+  }
+  cfg.formatTolerance = Math.max(0, Number(cfg.formatTolerance) || 0);
 
   cfg.maxSize = Math.max(0, Number(cfg.maxSize) || 0);
   cfg.concurrency = Math.max(1, Number(cfg.concurrency) || 1);

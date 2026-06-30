@@ -258,7 +258,9 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | — (new) | — | `--perceptual-target` | `perceptualTarget` | unified perceptually-lossless SSIM bar (0.99) driving WebP/AVIF searches |
 | — (new) | — | `--gif-colors` | `gifColors` | |
 | — (new) | — | `--effort` | `effort` | AVIF encoder effort (PNG uses `--png-effort`, WebP `--webp-effort`) |
-| — (new) | — | `-f, --format` | `format` | force everything to one format (e.g. `--format webp`) |
+| — (new) | — | `-f, --format` | `format` | force one format (`--format webp`) **or `auto`** = pick the smallest per image. See RESEARCH §9 |
+| — (new) | — | `--format-pool` / `--format-tolerance` | `formatPool` / `formatTolerance` | `auto` candidate set (default `avif,webp,jpeg,png`) + compatibility tie-break tolerance (3%) |
+| — (new) | — | `--manifest` | `manifest` | JSON map of source → output(s); required for `auto` skip-detection (extensions change) |
 | — (new) | — | `--keep-metadata` | `keepMetadata` | re-embed sRGB ICC + EXIF |
 | — (new) | — | `--flatten` | `flatten` | write output flat instead of mirroring subfolders |
 | — (new) | — | `--emit` | `emit` | also write sibling formats (e.g. `webp,avif`) beside each raster for `<picture>` fallbacks |
