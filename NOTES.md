@@ -128,10 +128,45 @@ regression. This makes the tool adapt to the machine it runs on without config.
   Both are good; pin `--png-engine sharp` / `--gif-engine sharp` for byte-stable,
   portable output, or the binary engines for byte-exact 2.9 parity. The CLI
   prints which engine won per file under `--verbose` (`... via pngquant`).
-- **JPEG stays on `sharp-ssim` by default** (not `auto`): the built-in adaptive
-  search already reproduces jpeg-recompress faithfully, and a JPEG shootout would
-  double the most expensive operation in the pipeline. `--jpeg-engine
-  jpeg-recompress` is there when you want byte-exact parity.
+- **JPEG `auto`** (default) runs the built-in sharp-ssim search and, when the
+  real `jpeg-recompress` is on PATH, also runs it and keeps the smaller result —
+  gated *fairly*: the binary only has to match the SSIM sharp actually achieved
+  (both engines are clamped to the `[jpeg-min, jpeg-max]` band, so neither may
+  reach `jpeg-target`), not a stricter bar. Without the binary it's just
+  sharp-ssim. Pin `--jpeg-engine sharp-ssim` (portable) or `jpeg-recompress`
+  (exact 2.9).
+
+### h. WebP — content-aware, not one-size-fits-all
+The reason "just add WebP" is hard: the right *mode* depends on the content, and
+the source extension is only a weak hint. A photo wants **lossy** WebP (tiny,
+visually identical); a flat graphic/screenshot/logo wants **lossless** (crisp
+edges, no ringing, and usually smaller at the high quality graphics need). Guess
+wrong and you get blurry logos or bloated photos.
+
+`--webp-mode auto` (default) decides per image by *measuring*, not guessing
+(`src/webp.js`):
+1. **Classify** the decoded pixels: a JPEG source is photographic by definition;
+   otherwise sample distinct colours — many ⇒ photographic, few ⇒ graphic
+   (`--` threshold `webpGraphicColorCap`).
+2. **Build candidates** for that class and keep the **smallest that clears the
+   SSIM bar** (`--webp-target`, default 0.99): photographic ⇒ a quality-searched
+   lossy encode (shared search from §1e, band `--webp-min..--webp-max`); graphic
+   ⇒ lossless (always exact) plus a lossy challenger, smaller wins.
+
+Measured results (auto, per input):
+
+| source | → webp | mode chosen |
+|---|---|---|
+| JPEG photo | 701 KB → 24 KB | lossy (SSIM 0.996) |
+| flat PNG | 3.4 KB → 48 B | lossless (exact) |
+| graphic PNG | 3.5 KB → 116 B | lossless (exact) |
+| photographic PNG | 1.27 MB → 6 KB | lossy (SSIM 0.994) |
+| animated GIF | 45.6 KB → 25.5 KB | animated lossy WebP |
+
+So you never have to pick lossy-vs-lossless by hand — the tool proves the right
+choice per file. `--webp-mode lossy|lossless|near-lossless` forces one. Today
+this fires on `--format webp` (convert everything to WebP); auto "also emit a
+.webp next to each original" is a planned follow-up (§4).
 
 ### b. ESM, not CommonJS
 `"type": "module"`. This is what lets us use current `svgo`, and it's the modern
@@ -183,7 +218,7 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `convertTiffJpeg` | `true` | `--no-tiff-to-jpeg` to disable | `tiffToJpeg` | |
 | `useMozJpeg` | `true` | `--no-mozjpeg` to disable | `mozjpeg` | now means "use mozjpeg trellis quantization when encoding JPEG candidates", in-process via libvips. In 2.9 this flag *switched the whole engine* (mozjpeg q50 vs jpeg-recompress); that role is now `--jpeg-engine`/`--jpeg-mode` |
 | `imageminJpegRecompress({min,max,quality})` | `30 / 60 / low` | `--jpeg-min` / `--jpeg-max` / `--jpeg-target` | `jpegMin` / `jpegMax` / `jpegTarget` | the adaptive SSIM search; `low` ⇒ target `0.999`. See §1e |
-| *(jpeg-recompress engine)* | implicit | `--jpeg-engine` | `jpegEngine` | `sharp-ssim` (default, portable) or `jpeg-recompress` (real binary, exact parity) |
+| *(jpeg-recompress engine)* | implicit | `--jpeg-engine` | `jpegEngine` | **`auto`** (default; shoots out sharp-ssim vs the real jpeg-recompress binary, keeps smaller), `sharp-ssim`, or `jpeg-recompress`. See §1g |
 | *(jpeg strategy)* | recompress | `--jpeg-mode` | `jpegMode` | `recompress` (default, adaptive) or `fixed` (single quality) |
 | mozjpeg fallback quality | `50` | `--jpeg-fallback-quality` | `jpegFallbackQuality` | used only when a recompress result would be ≥ the input |
 | `replaceSpaceChr` | `_` | `--space-char` | `spaceChar` | now replaces **all** whitespace, not just the first space |
@@ -202,10 +237,11 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `imageminGifsicle()` | defaults (`-O1`) | `--gif-engine` | `gifEngine` | **`auto`** (default; sharp + lossless `gifsicle -O3` when available), `sharp`, or `gifsicle`. See §1f/§1g |
 | `imageminSvgo({multipass})` | `true` | `--no-svg-multipass` | `svgMultipass` | svgo upgraded v2/3 → **v4**; see §1f |
 | svgo `removeViewBox:false` | keep | `--svg-remove-viewbox` | `svgRemoveViewBox` | svgo v4 keeps viewBox by default already |
-| — (new) | — | `--webp-quality` | `webpQuality` | |
+| — (new) | — | `--webp-mode` | `webpMode` | content-aware: **`auto`** (classify + shoot out lossy vs lossless), `lossy`, `lossless`, `near-lossless`. See §1h |
+| — (new) | — | `--webp-quality` / `--webp-min` / `--webp-max` / `--webp-target` / `--webp-effort` | `webp*` | lossy quality / auto search band / SSIM bar / encoder effort |
 | — (new) | — | `--avif-quality` | `avifQuality` | |
 | — (new) | — | `--gif-colors` | `gifColors` | |
-| — (new) | — | `--effort` | `effort` | png/webp/avif encoder effort |
+| — (new) | — | `--effort` | `effort` | AVIF encoder effort (PNG uses `--png-effort`, WebP `--webp-effort`) |
 | — (new) | — | `-f, --format` | `format` | force everything to one format (e.g. `--format webp`) |
 | — (new) | — | `--keep-metadata` | `keepMetadata` | re-embed sRGB ICC + EXIF |
 | — (new) | — | `--flatten` | `flatten` | write output flat instead of mirroring subfolders |

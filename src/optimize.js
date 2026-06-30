@@ -17,6 +17,7 @@ import sharp from 'sharp';
 import { resolveConfig } from './config.js';
 import { encodeJpeg } from './jpeg.js';
 import { encodePng } from './png.js';
+import { encodeWebp } from './webp.js';
 import { finalizeGif } from './gif.js';
 
 const EFFORT_RANGE = {
@@ -92,22 +93,36 @@ function buildPipeline(input, meta, cfg, animated) {
 /** Direct encode path for animated GIF/WebP (no raw round-trip, no SSIM search). */
 async function optimizeAnimated(input, meta, cfg, format, resized, pipeline) {
   if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ icc: 'srgb' });
+
+  let data;
+  let engine = 'sharp';
   if (format === 'webp') {
-    pipeline = pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') });
-    const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
-    return { data, info, inputFormat: meta.format, outputFormat: format, resized, quality: null, engine: 'sharp' };
+    data = await pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.webpEffort, 'webp') }).toBuffer();
+  } else {
+    const sharpGif = await pipeline
+      .gif({ colours: cfg.gifColors, dither: cfg.gifDither, effort: Math.min(10, Math.max(1, cfg.gifEffort)) })
+      .toBuffer();
+    const g = await finalizeGif(sharpGif, cfg); // lossless gifsicle pass (auto)
+    data = g.data;
+    engine = g.engine;
   }
-  pipeline = pipeline.gif({ colours: cfg.gifColors, dither: cfg.gifDither, effort: Math.min(10, Math.max(1, cfg.gifEffort)) });
-  const sharpGif = await pipeline.toBuffer();
-  const g = await finalizeGif(sharpGif, cfg); // lossless gifsicle pass (auto)
+
+  // Never-inflate: if we kept the same format, didn't resize, and the re-encode
+  // isn't smaller, ship the original untouched (libvips animated re-encodes can
+  // be larger than a well-packed source).
+  if (format === meta.format && !resized && data.length >= input.length) {
+    data = input;
+    engine = 'passthrough';
+  }
+
   return {
-    data: g.data,
-    info: { format: 'gif', width: meta.width, height: meta.height, size: g.data.length },
+    data,
+    info: { format, width: meta.width, height: meta.height, size: data.length },
     inputFormat: meta.format,
     outputFormat: format,
     resized,
     quality: null,
-    engine: g.engine,
+    engine,
   };
 }
 
@@ -165,6 +180,7 @@ export async function optimizeImageBuffer(input, options = {}) {
   let data;
   let info;
   let quality = null;
+  let ssimOut = null;
   let engine = 'sharp';
   if (format === 'png') {
     const r = await encodePng(rawBuf, rawInfo, cfg);
@@ -179,6 +195,14 @@ export async function optimizeImageBuffer(input, options = {}) {
     engine = g.engine;
     const m = await sharp(data).metadata();
     info = { format: 'gif', width: m.width, height: m.height, size: data.length };
+  } else if (format === 'webp') {
+    const r = await encodeWebp(rawBuf, rawInfo, cfg, { inputFormat });
+    data = r.data;
+    quality = r.quality ?? null;
+    ssimOut = r.ssim ?? null;
+    engine = `webp-${r.mode}`; // e.g. webp-lossy / webp-lossless (shown in --verbose)
+    const m = await sharp(data).metadata();
+    info = { format: 'webp', width: m.width, height: m.height, size: data.length };
   } else {
     ({ data, info } = await encodeRawNonJpeg(rawBuf, rawInfo, format, cfg));
   }
@@ -198,5 +222,5 @@ export async function optimizeImageBuffer(input, options = {}) {
     };
   }
 
-  return { data, info, inputFormat, outputFormat: format, resized, quality, engine };
+  return { data, info, inputFormat, outputFormat: format, resized, quality, ssim: ssimOut, engine };
 }

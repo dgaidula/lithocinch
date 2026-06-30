@@ -58,9 +58,9 @@ program
       .default('recompress')
   )
   .addOption(
-    new Option('--jpeg-engine <engine>', 'recompress engine: built-in or the real jpeg-recompress binary')
-      .choices(['sharp-ssim', 'jpeg-recompress'])
-      .default('sharp-ssim')
+    new Option('--jpeg-engine <engine>', 'auto shoots out sharp-ssim vs the real jpeg-recompress and keeps the smaller')
+      .choices(['auto', 'sharp-ssim', 'jpeg-recompress'])
+      .default('auto')
   )
   .option('--jpeg-min <n>', 'recompress quality search floor', '30')
   .option('--jpeg-max <n>', 'recompress quality search ceiling', '60')
@@ -77,7 +77,17 @@ program
   .option('--png-effort <n>', 'PNG palette effort 1-10 (10 = pngquant speed:1, best)', '10')
   .option('--png-min-ssim <n>', 'fall back to lossless if a palette PNG scores below this SSIM (0 = never)', '0.85')
   .option('--png-lossless', 'lossless PNG (no palette quantization, zlib only)', false)
-  .option('--webp-quality <n>', 'WebP quality 1-100', '80')
+  // WebP: content-aware. auto picks lossy vs lossless per image by measuring both.
+  .addOption(
+    new Option('--webp-mode <mode>', 'WebP strategy (auto = classify + shoot out lossy vs lossless)')
+      .choices(['auto', 'lossy', 'lossless', 'near-lossless'])
+      .default('auto')
+  )
+  .option('--webp-quality <n>', 'WebP lossy quality when not searching (1-100)', '80')
+  .option('--webp-effort <n>', 'WebP encoder effort 0-6', '4')
+  .option('--webp-min <n>', 'WebP auto lossy quality search floor', '50')
+  .option('--webp-max <n>', 'WebP auto lossy quality search ceiling', '90')
+  .option('--webp-target <ssim>', 'WebP auto lossy SSIM quality bar', '0.99')
   .option('--avif-quality <n>', 'AVIF quality 1-100', '50')
   .addOption(
     new Option('--gif-engine <engine>', 'GIF engine: auto adds a lossless gifsicle pass when available')
@@ -135,7 +145,12 @@ program.action(async (input, opts) => {
     pngEffort: Number(opts.pngEffort),
     pngMinSsim: Number(opts.pngMinSsim),
     pngLossless: opts.pngLossless,
+    webpMode: opts.webpMode,
     webpQuality: Number(opts.webpQuality),
+    webpEffort: Number(opts.webpEffort),
+    webpMin: Number(opts.webpMin),
+    webpMax: Number(opts.webpMax),
+    webpTargetSsim: Number(opts.webpTarget),
     avifQuality: Number(opts.avifQuality),
     gifEngine: opts.gifEngine,
     gifColors: Number(opts.gifColors),

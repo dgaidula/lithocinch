@@ -77,6 +77,7 @@ process-images ./photos --dry-run --verbose
 | `-s, --suffix <str>` | `_opt` | Inserted before each file's extension |
 | `-m, --max-size <px>` | `2560` | Cap width & height (`0` / `--no-resize` to disable) |
 | `-f, --format <fmt>` | *keep* | Force output to `jpeg`/`png`/`webp`/`avif`/`gif`/`tiff` |
+| `--webp-mode <m>` | `auto` | `auto` (classify + shoot out), `lossy`, `lossless`, `near-lossless` |
 | `--square` | off | Pad to a `max-size` square using `--bg-color` |
 | `--jpeg-target <ssim>` | `0.999` | Adaptive JPEG SSIM target (`0.999` = jpeg-recompress "low") |
 | `--jpeg-min` / `--jpeg-max` | `30` / `60` | Adaptive JPEG quality search band |
@@ -187,8 +188,33 @@ process-images ./photos --jpeg-engine jpeg-recompress
 
 Its SSIM is the standard Wang metric and is *close to* — not identical to —
 JPEG-Archive's; the 30–60 band keeps results tight either way. `--jpeg-mode
-fixed --jpeg-quality 80` switches to a plain single-quality encode. See
-[NOTES.md §1e](./NOTES.md) for the full rationale.
+fixed --jpeg-quality 80` switches to a plain single-quality encode. With the real
+`jpeg-recompress` on PATH, the default `--jpeg-engine auto` shoots it out against
+the built-in and keeps the smaller. See [NOTES.md §1e](./NOTES.md).
+
+## WebP (content-aware)
+
+`--format webp` converts the tree to WebP, and `--webp-mode auto` (default)
+**picks lossy vs lossless per image by measuring both** — because the right mode
+depends on the content, not the source extension:
+
+| source | → webp | chosen mode |
+|---|---|---|
+| photo / JPEG | much smaller | **lossy** (quality-searched to an SSIM target) |
+| flat graphic / logo / screenshot | tiny, **exact** | **lossless** |
+| photographic PNG | much smaller | **lossy** |
+| animated GIF | smaller, frames kept | animated **lossy** WebP |
+
+```bash
+process-images ./photos --format webp                 # auto per image
+process-images ./ui --format webp --webp-mode lossless # force lossless
+process-images ./photos --format webp --webp-target 0.985  # looser = smaller
+```
+
+A photographic source is detected from the JPEG marker or a high distinct-colour
+count; graphics fall to lossless (crisp, no ringing). `--verbose` shows the mode
+each file got (`... via webp-lossy` / `webp-lossless`). See
+[NOTES.md §1h](./NOTES.md).
 
 ## PNG, GIF, and SVG
 

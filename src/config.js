@@ -39,7 +39,9 @@ export const DEFAULTS = Object.freeze({
   // per-file SSIM-guided quality search, NOT a fixed quality. 'recompress' below
   // reproduces that in-process; 'fixed' is a plain single-quality encode.
   jpegMode: 'recompress', // 'recompress' | 'fixed'
-  jpegEngine: 'sharp-ssim', // 'sharp-ssim' (built-in, portable) | 'jpeg-recompress' (binary, exact parity)
+  // 'auto' = sharp-ssim, plus a shootout against the real jpeg-recompress when on
+  // PATH (keep the smaller result that still clears the SSIM target).
+  jpegEngine: 'auto', // 'auto' | 'sharp-ssim' | 'jpeg-recompress'
   jpegMin: 30, // search floor (was imageminJpegRecompress min)
   jpegMax: 60, // search ceiling (was imageminJpegRecompress max)
   jpegTarget: 0.999, // SSIM target; 0.999 == jpeg-recompress "low" preset ("quality: low")
@@ -71,7 +73,19 @@ export const DEFAULTS = Object.freeze({
   pngquantMax: 60,
   pngquantSpeed: 1,
 
-  webpQuality: 80,
+  // WebP: content-aware. 'auto' classifies photographic vs graphic and shoots out
+  // lossy (quality-searched) vs lossless, keeping the smallest that clears the bar.
+  webpMode: 'auto', // 'auto' | 'lossy' | 'lossless' | 'near-lossless'
+  webpQuality: 80, // lossy quality when not searching; also the lossless effort/quality hint
+  webpEffort: 4, // 0-6 encoder effort
+  webpMin: 50, // lossy quality search floor (auto)
+  webpMax: 90, // lossy quality search ceiling (auto)
+  webpTargetSsim: 0.99, // quality bar for the lossy candidate (vs source)
+  webpSsimDownsample: true, // downsample SSIM inside the lossy search (speed)
+  webpAlphaQuality: 100, // alpha channel quality for lossy WebP
+  webpNearLosslessQuality: 60, // preprocessing level for --webp-mode near-lossless
+  webpGraphicColorCap: 4096, // distinct-color sample threshold: <= => "graphic", > => "photographic"
+
   avifQuality: 50,
 
   // GIF: sharp/libimagequant for colour+resize, then a LOSSLESS gifsicle pass.

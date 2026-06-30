@@ -14,8 +14,9 @@
 
 import sharp from 'sharp';
 
-import { ssim, toLuma } from './ssim.js';
-import { runBinary } from './bin.js';
+import { toLuma } from './ssim.js';
+import { searchQuality, ssimOfEncoded } from './lossy-search.js';
+import { runBinary, hasBinary } from './bin.js';
 
 /** Build a sharp instance from a raw pixel buffer, re-attaching sRGB metadata if requested. */
 function fromRaw(rawBuf, info, cfg) {
@@ -39,61 +40,57 @@ const encodeAt = (rawBuf, info, cfg, quality) =>
  * @returns {Promise<{ data: Buffer, quality: number|null, ssim: number|null, engine: string }>}
  */
 export async function encodeJpeg(rawBuf, info, cfg, ctx) {
-  if (cfg.jpegEngine === 'jpeg-recompress') {
-    return recompressBinary(rawBuf, info, cfg);
-  }
   if (cfg.jpegMode === 'fixed') {
     const data = await encodeAt(rawBuf, info, cfg, cfg.jpegQuality);
     return { data, quality: cfg.jpegQuality, ssim: null, engine: 'sharp-fixed' };
   }
-  return recompressSSIM(rawBuf, info, cfg, ctx);
+  if (cfg.jpegEngine === 'jpeg-recompress') {
+    return recompressBinary(rawBuf, info, cfg);
+  }
+
+  const refLuma = toLuma(rawBuf, info.width, info.height, info.channels);
+  const sharpResult = await recompressSSIM(rawBuf, info, cfg, ctx, refLuma);
+
+  // 'auto': also try the real jpeg-recompress when present and keep the smaller
+  // result that still clears the SSIM target (same shootout pattern as PNG).
+  if (cfg.jpegEngine === 'auto' && (await hasBinary('jpeg-recompress'))) {
+    try {
+      const bin = await recompressBinary(rawBuf, info, cfg);
+      const score = await ssimOfEncoded(bin.data, refLuma, info.width, info.height, cfg.jpegSsimDownsample);
+      // Fair bar: the binary just has to be at least as good as what sharp
+      // actually achieved (which may itself ride the [min,max] band ceiling below
+      // jpegTarget), not held to a stricter standard than the result it competes
+      // with. Then it wins only if it's also smaller.
+      const bar = Math.min(cfg.jpegTarget, sharpResult.ssim ?? cfg.jpegTarget);
+      if (score >= bar && bin.data.length < sharpResult.data.length) {
+        return { ...bin, ssim: score };
+      }
+    } catch {
+      // binary failed mid-run — fall back to the sharp result silently
+    }
+  }
+  return sharpResult;
 }
 
 /**
  * Adaptive SSIM-guided search (the portable jpeg-recompress replacement).
  * Finds the lowest quality in [jpegMin, jpegMax] whose SSIM >= jpegTarget.
  */
-async function recompressSSIM(rawBuf, info, cfg, ctx) {
-  const ref = toLuma(rawBuf, info.width, info.height, info.channels);
-  const dsOpt = { downsample: cfg.jpegSsimDownsample };
+async function recompressSSIM(rawBuf, info, cfg, ctx, refLuma) {
+  const search = await searchQuality({
+    encode: (q) => encodeAt(rawBuf, info, cfg, q),
+    refLuma,
+    width: info.width,
+    height: info.height,
+    min: cfg.jpegMin,
+    max: cfg.jpegMax,
+    target: cfg.jpegTarget,
+    downsample: cfg.jpegSsimDownsample,
+  });
 
-  const scoreCache = new Map();
-  const score = async (q) => {
-    if (scoreCache.has(q)) return scoreCache.get(q);
-    const data = await encodeAt(rawBuf, info, cfg, q);
-    const dec = await sharp(data).raw().toBuffer({ resolveWithObject: true });
-    const cand = toLuma(dec.data, dec.info.width, dec.info.height, dec.info.channels);
-    const result = { data, ssim: ssim(ref, cand, info.width, info.height, dsOpt) };
-    scoreCache.set(q, result);
-    return result;
-  };
-
-  // Binary search for the smallest acceptable quality (size grows with quality,
-  // so the smallest acceptable quality is the smallest acceptable file).
-  let lo = Math.round(cfg.jpegMin);
-  let hi = Math.round(cfg.jpegMax);
-  let best = null;
-  let bestQ = null;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const r = await score(mid);
-    if (r.ssim >= cfg.jpegTarget) {
-      best = r;
-      bestQ = mid;
-      hi = mid - 1; // acceptable — try to go smaller
-    } else {
-      lo = mid + 1; // too distorted — need more quality
-    }
-  }
-  if (!best) {
-    // Nothing in the band met the target; use the max-quality encoding available.
-    best = await score(Math.round(cfg.jpegMax));
-    bestQ = Math.round(cfg.jpegMax);
-  }
-
-  let outData = best.data;
-  let outQ = bestQ;
-  let outSsim = best.ssim;
+  let outData = search.data;
+  let outQ = search.quality;
+  let outSsim = search.ssim;
   let engine = 'sharp-ssim';
 
   // "Larger than input" handling (2.9's behavior, hardened). Only meaningful when
