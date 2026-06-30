@@ -77,6 +77,8 @@ program
   .option('--png-effort <n>', 'PNG palette effort 1-10 (10 = pngquant speed:1, best)', '10')
   .option('--png-min-ssim <n>', 'fall back to lossless if a palette PNG scores below this SSIM (0 = never)', '0.85')
   .option('--png-lossless', 'lossless PNG (no palette quantization, zlib only)', false)
+  // The unified perceptually-lossless bar (drives WebP + AVIF lossy searches).
+  .option('--perceptual-target <ssim>', 'perceptually-lossless SSIM bar for WebP/AVIF', '0.99')
   // WebP: content-aware. auto picks lossy vs lossless per image by measuring both.
   .addOption(
     new Option('--webp-mode <mode>', 'WebP strategy (auto = classify + shoot out lossy vs lossless)')
@@ -87,8 +89,18 @@ program
   .option('--webp-effort <n>', 'WebP encoder effort 0-6', '4')
   .option('--webp-min <n>', 'WebP auto lossy quality search floor', '50')
   .option('--webp-max <n>', 'WebP auto lossy quality search ceiling', '90')
-  .option('--webp-target <ssim>', 'WebP auto lossy SSIM quality bar', '0.99')
-  .option('--avif-quality <n>', 'AVIF quality 1-100', '50')
+  .option('--webp-target <ssim>', 'WebP lossy SSIM bar (overrides --perceptual-target)')
+  // AVIF: same content-aware strategy (libheif/AV1; in the prebuilt sharp binary).
+  .addOption(
+    new Option('--avif-mode <mode>', 'AVIF strategy (auto = classify + shoot out lossy vs lossless)')
+      .choices(['auto', 'lossy', 'lossless'])
+      .default('auto')
+  )
+  .option('--avif-quality <n>', 'AVIF lossy quality when not searching (1-100)', '50')
+  .option('--avif-effort <n>', 'AVIF encoder effort 0-9 (slower = smaller)', '4')
+  .option('--avif-min <n>', 'AVIF auto lossy quality search floor', '30')
+  .option('--avif-max <n>', 'AVIF auto lossy quality search ceiling', '63')
+  .option('--avif-target <ssim>', 'AVIF lossy SSIM bar (overrides --perceptual-target)')
   .addOption(
     new Option('--gif-engine <engine>', 'GIF engine: auto adds a lossless gifsicle pass when available')
       .choices(['auto', 'sharp', 'gifsicle'])
@@ -145,13 +157,19 @@ program.action(async (input, opts) => {
     pngEffort: Number(opts.pngEffort),
     pngMinSsim: Number(opts.pngMinSsim),
     pngLossless: opts.pngLossless,
+    perceptualTarget: Number(opts.perceptualTarget),
     webpMode: opts.webpMode,
     webpQuality: Number(opts.webpQuality),
     webpEffort: Number(opts.webpEffort),
     webpMin: Number(opts.webpMin),
     webpMax: Number(opts.webpMax),
-    webpTargetSsim: Number(opts.webpTarget),
+    webpTargetSsim: opts.webpTarget != null ? Number(opts.webpTarget) : null,
+    avifMode: opts.avifMode,
     avifQuality: Number(opts.avifQuality),
+    avifEffort: Number(opts.avifEffort),
+    avifMin: Number(opts.avifMin),
+    avifMax: Number(opts.avifMax),
+    avifTargetSsim: opts.avifTarget != null ? Number(opts.avifTarget) : null,
     gifEngine: opts.gifEngine,
     gifColors: Number(opts.gifColors),
     gifsicleLossy: Number(opts.gifLossy),

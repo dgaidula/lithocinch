@@ -73,6 +73,13 @@ export const DEFAULTS = Object.freeze({
   pngquantMax: 60,
   pngquantSpeed: 1,
 
+  // The unified "perceptually lossless" SSIM bar. Every adaptive lossy search
+  // (WebP, AVIF; JPEG keeps its own validated 0.999-within-band) targets the
+  // SMALLEST encoding that still clears this — the goal being output that's
+  // visually indistinguishable from the source. Raise toward 0.999 for stricter
+  // (larger) output, lower for smaller. Per-codec --*-target flags override it.
+  perceptualTarget: 0.99,
+
   // WebP: content-aware. 'auto' classifies photographic vs graphic and shoots out
   // lossy (quality-searched) vs lossless, keeping the smallest that clears the bar.
   webpMode: 'auto', // 'auto' | 'lossy' | 'lossless' | 'near-lossless'
@@ -80,13 +87,21 @@ export const DEFAULTS = Object.freeze({
   webpEffort: 4, // 0-6 encoder effort
   webpMin: 50, // lossy quality search floor (auto)
   webpMax: 90, // lossy quality search ceiling (auto)
-  webpTargetSsim: 0.99, // quality bar for the lossy candidate (vs source)
+  webpTargetSsim: null, // perceptual bar for the lossy candidate; null => perceptualTarget
   webpSsimDownsample: true, // downsample SSIM inside the lossy search (speed)
   webpAlphaQuality: 100, // alpha channel quality for lossy WebP
   webpNearLosslessQuality: 60, // preprocessing level for --webp-mode near-lossless
   webpGraphicColorCap: 4096, // distinct-color sample threshold: <= => "graphic", > => "photographic"
 
-  avifQuality: 50,
+  // AVIF: same content-aware strategy as WebP (libheif/AV1, in the prebuilt sharp).
+  avifMode: 'auto', // 'auto' | 'lossy' | 'lossless'
+  avifQuality: 50, // lossy quality when not searching
+  avifEffort: 4, // 0-9 encoder effort (AVIF is slower; higher = smaller/slower)
+  avifMin: 30, // lossy quality search floor (auto)
+  avifMax: 63, // lossy quality search ceiling (auto)
+  avifTargetSsim: null, // perceptual bar; null => perceptualTarget
+  avifSsimDownsample: true,
+  avifGraphicColorCap: 4096,
 
   // GIF: sharp/libimagequant for colour+resize, then a LOSSLESS gifsicle pass.
   // 'auto' = use gifsicle when on PATH (lossless, best for animations), else sharp.
@@ -147,6 +162,10 @@ export function resolveConfig(opts = {}) {
 
   cfg.maxSize = Math.max(0, Number(cfg.maxSize) || 0);
   cfg.concurrency = Math.max(1, Number(cfg.concurrency) || 1);
+
+  // Per-codec perceptual targets default to the unified perceptualTarget.
+  if (cfg.webpTargetSsim == null) cfg.webpTargetSsim = cfg.perceptualTarget;
+  if (cfg.avifTargetSsim == null) cfg.avifTargetSsim = cfg.perceptualTarget;
 
   if (typeof cfg.bgColor === 'string') cfg.bgColor = parseColor(cfg.bgColor);
 

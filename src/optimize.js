@@ -18,6 +18,7 @@ import { resolveConfig } from './config.js';
 import { encodeJpeg } from './jpeg.js';
 import { encodePng } from './png.js';
 import { encodeWebp } from './webp.js';
+import { encodeAvif } from './avif.js';
 import { finalizeGif } from './gif.js';
 
 const EFFORT_RANGE = {
@@ -203,6 +204,14 @@ export async function optimizeImageBuffer(input, options = {}) {
     engine = `webp-${r.mode}`; // e.g. webp-lossy / webp-lossless (shown in --verbose)
     const m = await sharp(data).metadata();
     info = { format: 'webp', width: m.width, height: m.height, size: data.length };
+  } else if (format === 'avif') {
+    const r = await encodeAvif(rawBuf, rawInfo, cfg, { inputFormat });
+    data = r.data;
+    quality = r.quality ?? null;
+    ssimOut = r.ssim ?? null;
+    engine = `avif-${r.mode}`;
+    const m = await sharp(data).metadata();
+    info = { format: 'avif', width: m.width, height: m.height, size: data.length };
   } else {
     ({ data, info } = await encodeRawNonJpeg(rawBuf, rawInfo, format, cfg));
   }

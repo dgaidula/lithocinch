@@ -168,6 +168,17 @@ choice per file. `--webp-mode lossy|lossless|near-lossless` forces one. Today
 this fires on `--format webp` (convert everything to WebP); auto "also emit a
 .webp next to each original" is a planned follow-up (§4).
 
+**AVIF** uses the exact same content-aware driver (`--format avif`,
+`--avif-mode auto`), via libheif/AV1 in the prebuilt sharp. It's ~3× smaller than
+WebP on photos (e.g. a 701 KB JPEG → 7.4 KB AVIF vs 24 KB WebP) but slower to
+encode (own `--avif-effort`). WebP lossless still wins on flat graphics. Both
+share the **`--perceptual-target`** SSIM bar (default 0.99) — the single
+"perceptually lossless" knob; per-codec `--webp-target` / `--avif-target`
+override it. JPEG keeps its own validated 0.999-within-band. **JPEG XL is
+intentionally not supported** — not in the prebuilt sharp/libvips and dropped by
+Chrome; see [RESEARCH.md §6](./RESEARCH.md). Full measured findings for every
+codec live in [RESEARCH.md](./RESEARCH.md).
+
 ### b. ESM, not CommonJS
 `"type": "module"`. This is what lets us use current `svgo`, and it's the modern
 default. Node ≥ 20.
@@ -239,7 +250,8 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | svgo `removeViewBox:false` | keep | `--svg-remove-viewbox` | `svgRemoveViewBox` | svgo v4 keeps viewBox by default already |
 | — (new) | — | `--webp-mode` | `webpMode` | content-aware: **`auto`** (classify + shoot out lossy vs lossless), `lossy`, `lossless`, `near-lossless`. See §1h |
 | — (new) | — | `--webp-quality` / `--webp-min` / `--webp-max` / `--webp-target` / `--webp-effort` | `webp*` | lossy quality / auto search band / SSIM bar / encoder effort |
-| — (new) | — | `--avif-quality` | `avifQuality` | |
+| — (new) | — | `--avif-mode` / `--avif-target` / `--avif-min` / `--avif-max` / `--avif-effort` | `avif*` | content-aware AVIF (libheif/AV1), same strategy as WebP. See §1h |
+| — (new) | — | `--perceptual-target` | `perceptualTarget` | unified perceptually-lossless SSIM bar (0.99) driving WebP/AVIF searches |
 | — (new) | — | `--gif-colors` | `gifColors` | |
 | — (new) | — | `--effort` | `effort` | AVIF encoder effort (PNG uses `--png-effort`, WebP `--webp-effort`) |
 | — (new) | — | `-f, --format` | `format` | force everything to one format (e.g. `--format webp`) |

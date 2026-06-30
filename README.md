@@ -216,6 +216,17 @@ count; graphics fall to lossless (crisp, no ringing). `--verbose` shows the mode
 each file got (`... via webp-lossy` / `webp-lossless`). See
 [NOTES.md §1h](./NOTES.md).
 
+**AVIF** works the same way (`--format avif`, `--avif-mode auto`) and is ~3×
+smaller than WebP on photographs (a 701 KB JPEG → **7.4 KB AVIF** vs 24 KB WebP),
+at the cost of slower encoding. Both share one **perceptually-lossless** knob,
+`--perceptual-target` (SSIM, default 0.99) — raise toward 0.999 for stricter
+(larger) output, lower for smaller. JPEG keeps its own validated 0.999-in-band.
+
+> **JPEG XL** is intentionally not supported: it isn't in the prebuilt
+> sharp/libvips and Chrome removed it from browsers — so it can't be delivered to
+> most users or run on a bare Lambda. AVIF is the modern format here. Rationale +
+> all per-codec measurements are in [RESEARCH.md](./RESEARCH.md).
+
 ## PNG, GIF, and SVG
 
 - **PNG** uses sharp's `palette: true`, which is **libimagequant** — the exact
