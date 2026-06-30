@@ -12,10 +12,10 @@
 // An opt-in `jpegEngine: 'jpeg-recompress'` path shells out to the real binary
 // for byte-exact parity with 2.9 when it's available locally.
 
-import { spawn } from 'node:child_process';
 import sharp from 'sharp';
 
 import { ssim, toLuma } from './ssim.js';
+import { runBinary } from './bin.js';
 
 /** Build a sharp instance from a raw pixel buffer, re-attaching sRGB metadata if requested. */
 function fromRaw(rawBuf, info, cfg) {
@@ -140,38 +140,9 @@ async function recompressBinary(rawBuf, info, cfg) {
     '-',
     '-',
   ];
-  const data = await runBinary('jpeg-recompress', args, intermediate);
-  return { data, quality: null, ssim: null, engine: 'jpeg-recompress' };
-}
-
-function runBinary(bin, args, input) {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = spawn(bin, args);
-    } catch (err) {
-      return reject(binHint(bin, err));
-    }
-    const out = [];
-    const errOut = [];
-    child.on('error', (err) => reject(binHint(bin, err)));
-    child.stdout.on('data', (d) => out.push(d));
-    child.stderr.on('data', (d) => errOut.push(d));
-    child.on('close', (code) => {
-      if (code === 0) resolve(Buffer.concat(out));
-      else reject(new Error(`${bin} exited ${code}: ${Buffer.concat(errOut).toString().trim()}`));
-    });
-    child.stdin.on('error', () => {}); // ignore EPIPE if the child bails early
-    child.stdin.end(input);
-  });
-}
-
-function binHint(bin, err) {
-  if (err && err.code === 'ENOENT') {
-    return new Error(
-      `"${bin}" not found on PATH. Install JPEG-Archive (brew install jpeg-archive) ` +
-        `or drop --jpeg-engine jpeg-recompress to use the built-in sharp-ssim engine.`
-    );
+  const { code, stdout, stderr } = await runBinary('jpeg-recompress', args, intermediate);
+  if (code !== 0 || stdout.length === 0) {
+    throw new Error(`jpeg-recompress exited ${code}: ${stderr}`);
   }
-  return err;
+  return { data: stdout, quality: null, ssim: null, engine: 'jpeg-recompress' };
 }

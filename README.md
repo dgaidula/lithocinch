@@ -82,7 +82,9 @@ process-images ./photos --dry-run --verbose
 | `--jpeg-min` / `--jpeg-max` | `30` / `60` | Adaptive JPEG quality search band |
 | `--jpeg-mode <mode>` | `recompress` | `recompress` (adaptive) or `fixed` |
 | `--jpeg-quality <n>` | `80` | Fixed JPEG quality (only with `--jpeg-mode fixed`) |
-| `--png-quality <n>` | `80` | PNG palette quality |
+| `--png-quality <n>` | `80` | PNG palette quality (libimagequant) |
+| `--png-min-ssim <n>` | `0.85` | Fall back to lossless if a palette PNG scores below this SSIM |
+| `--png-engine <e>` | `sharp` | `sharp` (libimagequant) or `pngquant` (binary, exact 2.9 parity) |
 | `--overwrite` | off | Reprocess even if output already exists |
 | `--flatten` | off | Write output flat instead of mirroring subfolders |
 | `--no-copy-non-images` | — | Don't copy non-image files through |
@@ -186,6 +188,21 @@ Its SSIM is the standard Wang metric and is *close to* — not identical to —
 JPEG-Archive's; the 30–60 band keeps results tight either way. `--jpeg-mode
 fixed --jpeg-quality 80` switches to a plain single-quality encode. See
 [NOTES.md §1e](./NOTES.md) for the full rationale.
+
+## PNG, GIF, and SVG
+
+- **PNG** uses sharp's `palette: true`, which is **libimagequant** — the exact
+  library `pngquant` wraps — at max effort (= pngquant `speed:1`). It adds an
+  **SSIM gate** (`--png-min-ssim`, default 0.85): if palette quantization would
+  drop quality too far, it keeps a lossless encoding instead — the portable
+  equivalent of pngquant's min-quality "bail". `--png-engine pngquant` shells out
+  to the real binary for byte-exact 2.9 parity; `--png-lossless` forces lossless.
+- **GIF** uses sharp's libimagequant GIF encoder (equal-or-better than 2.9's
+  gifsicle for static GIFs; gifsicle still wins on complex animations).
+- **SVG** uses **svgo v4** (`preset-default` + multipass, viewBox preserved).
+
+See [NOTES.md §1f](./NOTES.md) for the head-to-head audit (sizes + SSIM) against
+the actual pngquant/gifsicle binaries.
 
 ## Development
 

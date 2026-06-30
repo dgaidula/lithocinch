@@ -65,6 +65,51 @@ falls back to a plain single-quality encode if you ever want it.
 Result: ~35 installed packages instead of 200+, prebuilt binaries that also run
 on AWS Lambda, and no global-binary dependency.
 
+### f. PNG / GIF / SVG — codec-by-codec audit vs 2.9
+These were verified head-to-head against the actual `pngquant` and `gifsicle`
+binaries (output size **and** measured SSIM), not assumed.
+
+**PNG** — 2.9 used `imageminPngquant({ quality:[0.5,0.6], speed:1 })`.
+- Engine: sharp's `png({ palette:true })` is **libimagequant** — literally the
+  library `pngquant` wraps. Same quantization quality at the same settings.
+- `speed:1` (pngquant's best) == libimagequant **effort 10**, which is the 3.x
+  default (`--png-effort`). Measured ~8.5% smaller than low effort.
+- Quality target: 2.9 used 50–60; 3.x defaults `--png-quality 80`, which keeps
+  *more* color = equal-or-better visual quality (often identical bytes when the
+  palette saturates anyway).
+- **The one real gap, now closed:** pngquant's `min` quality makes it *bail*
+  (keep the image lossless) when palettization would drop below the floor — a
+  deliberate "don't ship something ugly" guard. libvips doesn't expose that. So
+  3.x adds an **SSIM gate** (`--png-min-ssim`, default 0.85, scored full-res):
+  palettize, measure SSIM vs the source, and if it's too low, keep a lossless
+  encoding instead. Verified: a smooth wide-gamut gradient (SSIM 0.62) falls back
+  to lossless — even *smaller* than pngquant's own lossless bail (272K vs 291K),
+  same quality. A logo (SSIM 1.0) stays palette. The upstream never-inflate guard
+  caps the lossless fallback at the original size.
+- For **byte-exact parity**, `--png-engine pngquant` shells out to the real
+  binary with 2.9's exact `--quality 50-60 --speed 1`.
+- **Known size caveat (not quality):** for very small/flat PNGs, libvips emits a
+  chunkier file than pngquant (e.g. a flat logo: 594 B vs 195 B) — *identical
+  quality* (both lossless-equivalent), just less byte-optimal. `--png-engine
+  pngquant` gets the smaller bytes. Quality is never worse; only these tiny files
+  are larger.
+
+**GIF** — 2.9 used `imageminGifsicle()` (default `-O1`, lossless). 3.x uses
+sharp's libimagequant GIF encoder at max effort + 256 colors + dither. For static
+GIFs this is equal-or-better; for **complex animations gifsicle can still pack
+frames tighter** (its inter-frame diffing is best-in-class). GIF is rare in this
+workflow (the 2.9 comments are all about WordPress JP/PNG trees), so sharp's
+encoder is the pragmatic default. If you have animation-heavy GIFs that matter,
+keep running them through gifsicle — say the word and I'll add a `--gif-engine
+gifsicle` shell-out mirroring the png/jpeg ones.
+
+**SVG** — 2.9 used `imageminSvgo({ multipass:true, removeViewBox:false })` on an
+old svgo (v2/3, bundled by imagemin-svgo). 3.x calls **svgo v4 directly** with
+`preset-default` + `multipass`, viewBox preserved. svgo v4's preset is newer and
+safer (it *removed* the historically-risky `removeViewBox` from the default set),
+so output is equal-or-better and the intent (full optimization, keep viewBox,
+multipass) is matched exactly.
+
 ### b. ESM, not CommonJS
 `"type": "module"`. This is what lets us use current `svgo`, and it's the modern
 default. Node ≥ 20.
@@ -126,10 +171,14 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `batchLimit` | `100` | `-c, --concurrency` | `concurrency` | merged with `svgBatchLimit`; in-memory buffers, so this is true parallelism, not crash-avoidance batching |
 | `svgBatchLimit` | `10` | *(folded into `--concurrency`)* | — | |
 | `emptyTmpFolder` | `true` | *(removed)* | — | no temp dir anymore |
-| svgo `multipass` | `true` | `--no-svg-multipass` to disable | `svgMultipass` | |
-| svgo `removeViewBox:false` | keep | `--svg-remove-viewbox` to strip | `svgRemoveViewBox` | svgo v4 keeps viewBox by default already |
 | jpeg `quality` (fixed) | n/a | `--jpeg-quality` | `jpegQuality` | **only used in `--jpeg-mode fixed`**; default 80. The default mode is adaptive (see rows above), so this flag is normally irrelevant |
-| pngquant `quality` | `[0.5,0.6]` | `--png-quality` | `pngQuality` | single 1–100 scale now (libimagequant); default 80 |
+| `imageminPngquant({quality})` | `[0.5,0.6]` | `--png-quality` | `pngQuality` | libimagequant is the same engine pngquant wraps. Single 0–100 ceiling now; **default raised to 80** (≥ 2.9's 50–60 = equal-or-better quality). See §1f |
+| `imageminPngquant({speed})` | `1` | `--png-effort` | `pngEffort` | pngquant speed:1 ("best") == libimagequant effort 10, the new default |
+| *(pngquant min-quality bail)* | implicit | `--png-min-ssim` | `pngMinSsim` | portable replacement for pngquant's "keep lossless if too lossy"; default 0.85. See §1f |
+| *(png engine)* | pngquant | `--png-engine` | `pngEngine` | `sharp` (default, libimagequant) or `pngquant` (real binary, exact parity) |
+| `imageminGifsicle()` | defaults (`-O1`) | `--gif-colors` | `gifColors` | now sharp/libimagequant (max effort); see §1f for the gifsicle trade-off |
+| `imageminSvgo({multipass})` | `true` | `--no-svg-multipass` | `svgMultipass` | svgo upgraded v2/3 → **v4**; see §1f |
+| svgo `removeViewBox:false` | keep | `--svg-remove-viewbox` | `svgRemoveViewBox` | svgo v4 keeps viewBox by default already |
 | — (new) | — | `--webp-quality` | `webpQuality` | |
 | — (new) | — | `--avif-quality` | `avifQuality` | |
 | — (new) | — | `--gif-colors` | `gifColors` | |

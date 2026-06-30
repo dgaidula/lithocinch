@@ -68,11 +68,19 @@ program
   .option('--jpeg-fallback-quality <n>', 'mozjpeg quality used when recompress would grow the file', '50')
   .option('--no-jpeg-ssim-downsample', 'score SSIM at full resolution (slower, stricter)')
   .option('--jpeg-quality <n>', 'fixed-mode JPEG quality 1-100 (only with --jpeg-mode fixed)', '80')
-  .option('--png-quality <n>', 'PNG palette quality 1-100', '80')
+  .addOption(
+    new Option('--png-engine <engine>', 'PNG engine: built-in libimagequant or the real pngquant binary')
+      .choices(['sharp', 'pngquant'])
+      .default('sharp')
+  )
+  .option('--png-quality <n>', 'PNG palette quality 1-100 (libimagequant; 2.9 used ~60)', '80')
+  .option('--png-effort <n>', 'PNG palette effort 1-10 (10 = pngquant speed:1, best)', '10')
+  .option('--png-min-ssim <n>', 'fall back to lossless if a palette PNG scores below this SSIM (0 = never)', '0.85')
+  .option('--png-lossless', 'lossless PNG (no palette quantization, zlib only)', false)
   .option('--webp-quality <n>', 'WebP quality 1-100', '80')
   .option('--avif-quality <n>', 'AVIF quality 1-100', '50')
   .option('--gif-colors <n>', 'max GIF palette colors', '256')
-  .option('--effort <n>', 'PNG/WebP/AVIF encoder effort (higher = slower/smaller)', '4')
+  .option('--effort <n>', 'WebP/AVIF encoder effort (higher = slower/smaller)', '4')
   // --- svg ---
   .option('--svg-remove-viewbox', 'let svgo strip the viewBox attribute', false)
   .option('--no-svg-multipass', 'run svgo a single pass instead of multipass')
@@ -116,7 +124,11 @@ program.action(async (input, opts) => {
     jpegFallbackQuality: Number(opts.jpegFallbackQuality),
     jpegSsimDownsample: opts.jpegSsimDownsample, // false when --no-jpeg-ssim-downsample
     jpegQuality: Number(opts.jpegQuality),
+    pngEngine: opts.pngEngine,
     pngQuality: Number(opts.pngQuality),
+    pngEffort: Number(opts.pngEffort),
+    pngMinSsim: Number(opts.pngMinSsim),
+    pngLossless: opts.pngLossless,
     webpQuality: Number(opts.webpQuality),
     avifQuality: Number(opts.avifQuality),
     gifColors: Number(opts.gifColors),

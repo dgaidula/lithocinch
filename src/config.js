@@ -51,11 +51,33 @@ export const DEFAULTS = Object.freeze({
   jpegRecompressMethod: 'ssim', // jpeg-recompress --method (mpe|ssim|ms-ssim|smallfry)
   jpegRecompressIntermediate: 95, // quality of the intermediate JPEG fed to the binary
 
-  pngQuality: 80, // sharp uses libimagequant under the hood (the pngquant replacement)
+  // PNG: libimagequant palette quantization == 2.9's imagemin-pngquant.
+  pngEngine: 'sharp', // 'sharp' (built-in libimagequant, portable) | 'pngquant' (binary, exact 2.9 parity)
+  pngQuality: 80, // libimagequant quality ceiling (2.9 used 50-60; 80 keeps more color = >= quality)
+  pngEffort: 10, // libimagequant effort 1-10; 10 == pngquant speed:1 ("best", 2.9's choice)
+  pngColors: 256, // max palette colors (pngquant default)
+  pngDither: 1.0, // Floyd-Steinberg dither (pngquant default)
+  pngLossless: false, // true = skip palette quantization, lossless zlib only
+  // Quality gate (the portable replacement for pngquant's min-quality bail): if a
+  // palette PNG scores below this SSIM vs the source, fall back to lossless.
+  pngMinSsim: 0.85,
+  // Full-res SSIM for the gate: it runs once per PNG (not in a search loop like
+  // JPEG), and full-res is more protective — it won't smooth away palette banding.
+  pngSsimDownsample: false,
+  // pngquant binary engine knobs (only when pngEngine:'pngquant') — defaults are 2.9's exact values.
+  pngquantMin: 50,
+  pngquantMax: 60,
+  pngquantSpeed: 1,
+
   webpQuality: 80,
   avifQuality: 50,
+
+  // GIF: sharp/libimagequant replacement for imagemin-gifsicle (2.9 defaults).
   gifColors: 256,
-  effort: 4, // png/webp/avif encoder effort (0-9 / 0-6 depending on codec; clamped per-codec)
+  gifDither: 1.0,
+  gifEffort: 10, // 2.9's gifsicle used -O1; max effort here is equal-or-better for most GIFs
+
+  effort: 4, // WebP/AVIF encoder effort (clamped per-codec); PNG/GIF use their own effort above
 
   // ---- svg ----
   svgRemoveViewBox: false, // keep viewBox by default (was the explicit svgo override)

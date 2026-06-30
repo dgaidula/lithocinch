@@ -16,6 +16,7 @@
 import sharp from 'sharp';
 import { resolveConfig } from './config.js';
 import { encodeJpeg } from './jpeg.js';
+import { encodePng } from './png.js';
 
 const EFFORT_RANGE = {
   png: [1, 10],
@@ -43,10 +44,7 @@ function encodeRawNonJpeg(rawBuf, info, format, cfg) {
   });
   if (cfg.keepMetadata) img = img.withMetadata({ icc: 'srgb' });
   switch (format) {
-    case 'png':
-      return img
-        .png({ quality: cfg.pngQuality, palette: true, effort: clampEffort(cfg.effort, 'png'), compressionLevel: 9 })
-        .toBuffer({ resolveWithObject: true });
+    // PNG is handled separately (encodePng, with its SSIM gate) in the caller.
     case 'webp':
       return img
         .webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') })
@@ -56,7 +54,11 @@ function encodeRawNonJpeg(rawBuf, info, format, cfg) {
         .avif({ quality: cfg.avifQuality, effort: clampEffort(cfg.effort, 'avif') })
         .toBuffer({ resolveWithObject: true });
     case 'gif':
-      return img.gif({ colours: cfg.gifColors }).toBuffer({ resolveWithObject: true });
+      // gifsicle replacement: libimagequant palette + max effort (2.9 used
+      // gifsicle's default -O1; sharp at high effort is equal-or-better for most).
+      return img
+        .gif({ colours: cfg.gifColors, dither: cfg.gifDither, effort: clampEffort(cfg.gifEffort, 'png') })
+        .toBuffer({ resolveWithObject: true });
     case 'tiff':
       return img.tiff({ quality: cfg.jpegQuality, compression: 'jpeg' }).toBuffer({ resolveWithObject: true });
     default:
@@ -113,6 +115,9 @@ export async function optimizeImageBuffer(input, options = {}) {
   const keepAnimation = isAnimated && (format === 'gif' || format === 'webp');
 
   const { pipeline, resized } = buildPipeline(inputBuf, meta, cfg, keepAnimation);
+  // Pixels are only "untransformed" (so the original may be passed straight
+  // through) when we didn't resize/trim/pad.
+  const transformed = resized || cfg.trim || cfg.square;
 
   if (keepAnimation) {
     return optimizeAnimated(inputBuf, meta, cfg, format, resized, pipeline);
@@ -128,13 +133,7 @@ export async function optimizeImageBuffer(input, options = {}) {
   const { data: rawBuf, info: rawInfo } = await prepared.raw().toBuffer({ resolveWithObject: true });
 
   if (format === 'jpeg') {
-    const ctx = {
-      inputBytes: inputBuf.length,
-      inputFormat,
-      inputBuffer: inputBuf,
-      // Only safe to pass the original through untouched if we didn't change pixels.
-      transformed: resized || cfg.trim || cfg.square,
-    };
+    const ctx = { inputBytes: inputBuf.length, inputFormat, inputBuffer: inputBuf, transformed };
     const r = await encodeJpeg(rawBuf, rawInfo, cfg, ctx);
     const info = await sharp(r.data).metadata();
     return {
@@ -149,6 +148,32 @@ export async function optimizeImageBuffer(input, options = {}) {
     };
   }
 
-  const { data, info } = await encodeRawNonJpeg(rawBuf, rawInfo, format, cfg);
-  return { data, info, inputFormat, outputFormat: format, resized, quality: null };
+  let data;
+  let info;
+  let quality = null;
+  if (format === 'png') {
+    const r = await encodePng(rawBuf, rawInfo, cfg);
+    data = r.data;
+    const m = await sharp(data).metadata();
+    info = { format: 'png', width: m.width, height: m.height, size: data.length };
+  } else {
+    ({ data, info } = await encodeRawNonJpeg(rawBuf, rawInfo, format, cfg));
+  }
+
+  // Universal never-inflate guard (mirrors pngquant's "keep the original if it
+  // can't do better"): if we didn't transform the pixels and the re-encode isn't
+  // smaller than the source of the same format, pass the original through.
+  if (!transformed && format === inputFormat && data.length >= inputBuf.length) {
+    return {
+      data: inputBuf,
+      info: { format: inputFormat, width: meta.width, height: meta.height, size: inputBuf.length },
+      inputFormat,
+      outputFormat: format,
+      resized,
+      quality: null,
+      engine: 'passthrough',
+    };
+  }
+
+  return { data, info, inputFormat, outputFormat: format, resized, quality };
 }
