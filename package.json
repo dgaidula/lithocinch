@@ -1,0 +1,60 @@
+{
+  "name": "process-images",
+  "version": "3.0.0",
+  "description": "Fast, batch image optimizer built on sharp + svgo. Caps dimensions, normalizes color to sRGB, compresses JPEG/PNG/GIF/WebP/AVIF/TIFF and SVG. Usable as a CLI, a library, or an AWS Lambda.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./lambda": "./lambda/handler.js"
+  },
+  "main": "./src/index.js",
+  "bin": {
+    "process-images": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "lambda",
+    "docs",
+    "README.md",
+    "NOTES.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "optimize": "node src/cli.js",
+    "test": "node --test",
+    "lint": "node --check src/cli.js"
+  },
+  "keywords": [
+    "image",
+    "optimize",
+    "optimise",
+    "sharp",
+    "svgo",
+    "jpeg",
+    "mozjpeg",
+    "png",
+    "webp",
+    "avif",
+    "svg",
+    "resize",
+    "srgb",
+    "cmyk",
+    "batch",
+    "lambda",
+    "cli"
+  ],
+  "author": "Dan Gaidula <dan@iceboxind.com>",
+  "license": "MIT",
+  "dependencies": {
+    "cli-progress": "^3.12.0",
+    "commander": "^15.0.0",
+    "picocolors": "^1.1.1",
+    "sharp": "^0.35.2",
+    "svgo": "^4.0.1",
+    "tinyglobby": "^0.2.17"
+  }
+}

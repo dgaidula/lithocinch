@@ -1,0 +1,17 @@
+node_modules/
+*.log
+logs/
+
+# tool output dirs (default sibling-folder convention)
+img-optimize-output/
+img-optimize-error/
+
+# build artifacts for the Lambda bundle
+dist/
+*.zip
+
+# OS / editor cruft
+.DS_Store
+*.swp
+.idea/
+.vscode/
