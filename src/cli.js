@@ -50,8 +50,24 @@ program
     ])
   )
   .option('--no-tiff-to-jpeg', 'do NOT convert TIFF (incl. mislabeled .jpg TIFFs) to JPEG')
-  .option('--no-mozjpeg', 'use baseline JPEG encoder instead of mozjpeg')
-  .option('--jpeg-quality <n>', 'JPEG quality 1-100', '80')
+  .option('--no-mozjpeg', 'disable mozjpeg trellis quantization (faster, slightly larger)')
+  // JPEG adaptive compression (the jpeg-recompress replacement)
+  .addOption(
+    new Option('--jpeg-mode <mode>', 'JPEG strategy: adaptive SSIM search vs single fixed quality')
+      .choices(['recompress', 'fixed'])
+      .default('recompress')
+  )
+  .addOption(
+    new Option('--jpeg-engine <engine>', 'recompress engine: built-in or the real jpeg-recompress binary')
+      .choices(['sharp-ssim', 'jpeg-recompress'])
+      .default('sharp-ssim')
+  )
+  .option('--jpeg-min <n>', 'recompress quality search floor', '30')
+  .option('--jpeg-max <n>', 'recompress quality search ceiling', '60')
+  .option('--jpeg-target <ssim>', 'recompress SSIM target (0.999 = jpeg-recompress "low")', '0.999')
+  .option('--jpeg-fallback-quality <n>', 'mozjpeg quality used when recompress would grow the file', '50')
+  .option('--no-jpeg-ssim-downsample', 'score SSIM at full resolution (slower, stricter)')
+  .option('--jpeg-quality <n>', 'fixed-mode JPEG quality 1-100 (only with --jpeg-mode fixed)', '80')
   .option('--png-quality <n>', 'PNG palette quality 1-100', '80')
   .option('--webp-quality <n>', 'WebP quality 1-100', '80')
   .option('--avif-quality <n>', 'AVIF quality 1-100', '50')
@@ -92,6 +108,13 @@ program.action(async (input, opts) => {
     format: opts.format ?? null,
     tiffToJpeg: opts.tiffToJpeg, // false when --no-tiff-to-jpeg
     mozjpeg: opts.mozjpeg, // false when --no-mozjpeg
+    jpegMode: opts.jpegMode,
+    jpegEngine: opts.jpegEngine,
+    jpegMin: Number(opts.jpegMin),
+    jpegMax: Number(opts.jpegMax),
+    jpegTarget: Number(opts.jpegTarget),
+    jpegFallbackQuality: Number(opts.jpegFallbackQuality),
+    jpegSsimDownsample: opts.jpegSsimDownsample, // false when --no-jpeg-ssim-downsample
     jpegQuality: Number(opts.jpegQuality),
     pngQuality: Number(opts.pngQuality),
     webpQuality: Number(opts.webpQuality),
@@ -136,10 +159,15 @@ program.action(async (input, opts) => {
           bar.start(evt.count, 0, { file: '' });
         }
         break;
-      case 'done':
-        if (opts.verbose) logger.info(`${evt.file} -> ${evt.outFile} (${fmtBytes(evt.bytesIn)} -> ${fmtBytes(evt.bytesOut)})`);
+      case 'done': {
+        if (opts.verbose) {
+          const q = evt.quality != null ? ` q${evt.quality}` : '';
+          const s = evt.ssim != null ? ` ssim${evt.ssim.toFixed(4)}` : '';
+          logger.info(`${evt.file} -> ${evt.outFile} (${fmtBytes(evt.bytesIn)} -> ${fmtBytes(evt.bytesOut)}${q}${s})`);
+        }
         bar?.increment({ file: truncate(evt.file) });
         break;
+      }
       case 'skip':
         bar?.increment({ file: pc.dim(`skip ${truncate(evt.file)}`) });
         break;

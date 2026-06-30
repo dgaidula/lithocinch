@@ -134,6 +134,8 @@ export async function processDirectory(options = {}, hooks = {}) {
         file: job.rel,
         outFile: relOut,
         kind: result.kind,
+        quality: result.quality ?? null,
+        ssim: result.ssim ?? null,
         bytesIn: bytes.length,
         bytesOut: result.data.length,
       });

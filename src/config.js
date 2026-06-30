@@ -32,8 +32,25 @@ export const DEFAULTS = Object.freeze({
   // ---- format / encoders ----
   format: null, // null = keep input format; or 'jpeg'|'png'|'webp'|'avif'|'gif'|'tiff'
   tiffToJpeg: true, // was const convertTiffJpeg
-  mozjpeg: true, // was const useMozJpeg (mozjpeg is built into libvips/sharp now)
-  jpegQuality: 80,
+  mozjpeg: true, // was const useMozJpeg (mozjpeg trellis quantization, built into libvips/sharp)
+
+  // ---- JPEG: adaptive per-file compression (replaces imagemin-jpeg-recompress) ----
+  // 2.9's real workhorse was jpeg-recompress (min:30 max:60 quality:"low"): a
+  // per-file SSIM-guided quality search, NOT a fixed quality. 'recompress' below
+  // reproduces that in-process; 'fixed' is a plain single-quality encode.
+  jpegMode: 'recompress', // 'recompress' | 'fixed'
+  jpegEngine: 'sharp-ssim', // 'sharp-ssim' (built-in, portable) | 'jpeg-recompress' (binary, exact parity)
+  jpegMin: 30, // search floor (was imageminJpegRecompress min)
+  jpegMax: 60, // search ceiling (was imageminJpegRecompress max)
+  jpegTarget: 0.999, // SSIM target; 0.999 == jpeg-recompress "low" preset ("quality: low")
+  jpegSsimDownsample: true, // standard SSIM auto-downsample (fast; set false for full-res scoring)
+  jpegFallbackQuality: 50, // mozjpeg quality used when a recompress result is >= the input (2.9's fallback)
+  jpegQuality: 80, // used ONLY in jpegMode:'fixed'
+  // --- jpeg-recompress binary engine knobs (only when jpegEngine:'jpeg-recompress') ---
+  jpegRecompressPreset: 'low', // jpeg-recompress --quality (low|medium|high|veryhigh)
+  jpegRecompressMethod: 'ssim', // jpeg-recompress --method (mpe|ssim|ms-ssim|smallfry)
+  jpegRecompressIntermediate: 95, // quality of the intermediate JPEG fed to the binary
+
   pngQuality: 80, // sharp uses libimagequant under the hood (the pngquant replacement)
   webpQuality: 80,
   avifQuality: 50,

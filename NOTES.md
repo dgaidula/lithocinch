@@ -17,12 +17,50 @@ old pattern that newer versions dropped" trap you were stuck in. Those packages
 also went ESM-only and broke `require()`.
 
 3.x does **raster compression with `sharp` alone**:
-- `mozjpeg` is built into libvips (`.jpeg({ mozjpeg: true })`).
+- JPEG uses an **adaptive per-file SSIM search** that reproduces
+  `imagemin-jpeg-recompress` (see §1e below) — *not* a fixed quality.
 - `pngquant`-grade palette quantization is libimagequant, built into libvips
   (`.png({ palette: true, quality })`).
 - GIF, WebP, AVIF, TIFF all encode natively.
+- `mozjpeg` trellis quantization is built into libvips and is used when encoding
+  every JPEG candidate.
 
 SVG still uses **`svgo`** (v4, ESM) directly — no `imagemin-svgo` wrapper.
+
+### e. JPEG quality is adaptive, not fixed — the jpeg-recompress reimplementation
+This is the single most important behavior to preserve. 2.9's real workhorse was
+`imagemin-jpeg-recompress` with `{ min: 30, max: 60, quality: "low" }`. That tool
+does **not** apply one quality to every image — it binary-searches JPEG quality
+per file and keeps the **smallest** encoding whose **SSIM** vs the source still
+clears a perceptual target (`"low"` ≈ 0.999 SSIM). A flat logo and a detailed
+photo need very different quality numbers for the same visual result; the search
+finds each one's sweet spot. `mozjpeg` (quality 50) was only a **fallback** for
+when recompress produced a file *larger* than the input.
+
+3.x reproduces this in `src/jpeg.js` + `src/ssim.js`:
+- Decode the processed image to raw pixels **once**.
+- Binary-search quality in `[--jpeg-min, --jpeg-max]` (default 30–60); for each
+  candidate, encode with sharp/mozjpeg, decode, and score **SSIM** vs the source
+  luma. Keep the lowest quality whose SSIM ≥ `--jpeg-target` (default 0.999).
+- If nothing in the band reaches the target, use the band ceiling.
+- **Larger-than-input fallback:** if the source was a JPEG and the best result
+  isn't smaller, try `--jpeg-fallback-quality` (mozjpeg 50) and, if the original
+  is *still* smaller and the pixels weren't resized/trimmed, pass the original
+  through untouched (2.9 would have written the larger re-encode — hardened here).
+
+Because the search re-encodes candidates with sharp, it needs **no native
+jpeg-recompress binary** and runs anywhere sharp does, including Lambda. For
+byte-exact parity with 2.9 you can still opt into the real binary with
+`--jpeg-engine jpeg-recompress` (requires `jpeg-recompress` on PATH —
+`brew install jpeg-archive`); it's piped via stdin/stdout, no temp files.
+
+Notes on fidelity: our SSIM is the standard Wang 11×11-Gaussian metric with the
+reference implementation's auto-downsampling, so absolute values are *close to*
+but not bit-identical to JPEG-Archive's `iqa` SSIM. The `[min,max]` band is the
+real guardrail (output quality can never leave 30–60), so results are tight and
+"the same or similar" regardless. `--jpeg-target`, `--jpeg-min`, `--jpeg-max`,
+and `--no-jpeg-ssim-downsample` let you dial it in, and `--jpeg-mode fixed`
+falls back to a plain single-quality encode if you ever want it.
 
 Result: ~35 installed packages instead of 200+, prebuilt binaries that also run
 on AWS Lambda, and no global-binary dependency.
@@ -75,7 +113,11 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `bgColor` | `{255,255,255,1}` | `--bg-color` | `bgColor` | accepts `#rrggbb`, `#rgb`, `#rrggbbaa`, or `r,g,b[,a]`; also used to flatten alpha on →JPEG |
 | `trimWhiteSpace` | `false` | `--trim` | `trim` | |
 | `convertTiffJpeg` | `true` | `--no-tiff-to-jpeg` to disable | `tiffToJpeg` | |
-| `useMozJpeg` | `true` | `--no-mozjpeg` to disable | `mozjpeg` | mozjpeg now in-process (libvips), not a binary |
+| `useMozJpeg` | `true` | `--no-mozjpeg` to disable | `mozjpeg` | now means "use mozjpeg trellis quantization when encoding JPEG candidates", in-process via libvips. In 2.9 this flag *switched the whole engine* (mozjpeg q50 vs jpeg-recompress); that role is now `--jpeg-engine`/`--jpeg-mode` |
+| `imageminJpegRecompress({min,max,quality})` | `30 / 60 / low` | `--jpeg-min` / `--jpeg-max` / `--jpeg-target` | `jpegMin` / `jpegMax` / `jpegTarget` | the adaptive SSIM search; `low` ⇒ target `0.999`. See §1e |
+| *(jpeg-recompress engine)* | implicit | `--jpeg-engine` | `jpegEngine` | `sharp-ssim` (default, portable) or `jpeg-recompress` (real binary, exact parity) |
+| *(jpeg strategy)* | recompress | `--jpeg-mode` | `jpegMode` | `recompress` (default, adaptive) or `fixed` (single quality) |
+| mozjpeg fallback quality | `50` | `--jpeg-fallback-quality` | `jpegFallbackQuality` | used only when a recompress result would be ≥ the input |
 | `replaceSpaceChr` | `_` | `--space-char` | `spaceChar` | now replaces **all** whitespace, not just the first space |
 | `lowerCaseExtensions` | `false` | `--lowercase-ext` | `lowercaseExt` | |
 | `copyNonImgFiles` | `true` | `--no-copy-non-images` to disable | `copyNonImages` | |
@@ -86,7 +128,7 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | `emptyTmpFolder` | `true` | *(removed)* | — | no temp dir anymore |
 | svgo `multipass` | `true` | `--no-svg-multipass` to disable | `svgMultipass` | |
 | svgo `removeViewBox:false` | keep | `--svg-remove-viewbox` to strip | `svgRemoveViewBox` | svgo v4 keeps viewBox by default already |
-| jpeg `quality` (mozjpeg) | `50` | `--jpeg-quality` | `jpegQuality` | **default raised to 80**; 50 was aggressive. Set `--jpeg-quality 50` to match 2.9 |
+| jpeg `quality` (fixed) | n/a | `--jpeg-quality` | `jpegQuality` | **only used in `--jpeg-mode fixed`**; default 80. The default mode is adaptive (see rows above), so this flag is normally irrelevant |
 | pngquant `quality` | `[0.5,0.6]` | `--png-quality` | `pngQuality` | single 1–100 scale now (libimagequant); default 80 |
 | — (new) | — | `--webp-quality` | `webpQuality` | |
 | — (new) | — | `--avif-quality` | `avifQuality` | |
@@ -102,9 +144,11 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 
 ## 3. Behavioral differences to be aware of
 
-- **JPEG default quality is 80, not 50.** 2.9 hard-coded mozjpeg quality 50,
-  which is quite lossy. If you want byte-for-byte parity with your old runs, pass
-  `--jpeg-quality 50`.
+- **JPEG is adaptive by default (matches 2.9's jpeg-recompress).** Quality is
+  chosen per file by SSIM within the 30–60 band, not fixed. For byte-exact parity
+  with your old runs, `--jpeg-engine jpeg-recompress` (needs the binary). The
+  built-in metric is close-but-not-identical to JPEG-Archive's `iqa` SSIM; the
+  30–60 band keeps output tight either way. See §1e.
 - **`--copy-non-images-by-type` defaults off.** 2.9 had both `copyNonImgFiles`
   and `copyNonImageByType` on, so non-image files landed in output **twice**
   (once mirrored, once under `non-images/<ext>/`). Now you pick one.

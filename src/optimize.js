@@ -8,14 +8,15 @@
 //     handling are all built into libvips, which sharp ships as a prebuilt
 //     binary that also works on AWS Lambda.
 //   - imagemin's plugin chain relied on bin-wrapper global binaries that newer
-//     Node and Lambda environments routinely break on — the exact "old pattern"
-//     this rewrite exists to escape.
+//     Node and Lambda environments routinely break on.
+//
+// JPEG specifically is NOT a fixed-quality encode: it goes through the adaptive
+// SSIM-guided search in jpeg.js, reproducing 2.9's jpeg-recompress behavior.
 
 import sharp from 'sharp';
 import { resolveConfig } from './config.js';
+import { encodeJpeg } from './jpeg.js';
 
-// libvips encoder "effort" ranges differ per codec; clamp so one --effort flag
-// is safe across all of them.
 const EFFORT_RANGE = {
   png: [1, 10],
   webp: [0, 6],
@@ -27,47 +28,71 @@ function clampEffort(value, codec) {
   return Math.min(max, Math.max(min, value));
 }
 
-/**
- * Decide the target sharp format for an input.
- * @param {string} inputFormat sharp's detected format (e.g. 'jpeg','png','tiff')
- * @param {ReturnType<typeof resolveConfig>} cfg
- */
 function targetFormat(inputFormat, cfg) {
   if (cfg.format) return cfg.format;
-  // Real TIFFs (often masquerading as .jpg from phones/WhatsApp) -> JPEG.
   if (inputFormat === 'tiff' && cfg.tiffToJpeg) return 'jpeg';
   if (inputFormat === 'jpg') return 'jpeg';
   if (inputFormat === 'tif') return 'tiff';
   return inputFormat;
 }
 
-/** Attach the right encoder to the pipeline for the chosen format. */
-function encode(pipeline, format, cfg, hasAlpha) {
+/** Encode a non-JPEG format from a raw pixel buffer. */
+function encodeRawNonJpeg(rawBuf, info, format, cfg) {
+  let img = sharp(rawBuf, {
+    raw: { width: info.width, height: info.height, channels: info.channels },
+  });
+  if (cfg.keepMetadata) img = img.withMetadata({ icc: 'srgb' });
   switch (format) {
-    case 'jpeg':
-      // JPEG has no alpha; flatten transparency onto the configured background
-      // so PNG/WebP -> JPEG conversions don't turn transparent areas black.
-      if (hasAlpha) pipeline = pipeline.flatten({ background: cfg.bgColor });
-      return pipeline.jpeg({ quality: cfg.jpegQuality, mozjpeg: cfg.mozjpeg });
     case 'png':
-      return pipeline.png({
-        quality: cfg.pngQuality, // triggers libimagequant palette quantization
-        palette: true,
-        effort: clampEffort(cfg.effort, 'png'),
-        compressionLevel: 9,
-      });
+      return img
+        .png({ quality: cfg.pngQuality, palette: true, effort: clampEffort(cfg.effort, 'png'), compressionLevel: 9 })
+        .toBuffer({ resolveWithObject: true });
     case 'webp':
-      return pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') });
+      return img
+        .webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') })
+        .toBuffer({ resolveWithObject: true });
     case 'avif':
-      return pipeline.avif({ quality: cfg.avifQuality, effort: clampEffort(cfg.effort, 'avif') });
+      return img
+        .avif({ quality: cfg.avifQuality, effort: clampEffort(cfg.effort, 'avif') })
+        .toBuffer({ resolveWithObject: true });
     case 'gif':
-      return pipeline.gif({ colours: cfg.gifColors });
+      return img.gif({ colours: cfg.gifColors }).toBuffer({ resolveWithObject: true });
     case 'tiff':
-      return pipeline.tiff({ quality: cfg.jpegQuality, compression: 'jpeg' });
+      return img.tiff({ quality: cfg.jpegQuality, compression: 'jpeg' }).toBuffer({ resolveWithObject: true });
     default:
-      // Unknown/unsupported (e.g. heif without delegate) — re-encode as-is.
-      return pipeline;
+      return img.toBuffer({ resolveWithObject: true });
   }
+}
+
+/**
+ * Build the geometry/color processing stage (shared by raw and animated paths).
+ * @returns {{ pipeline: sharp.Sharp, resized: boolean }}
+ */
+function buildPipeline(input, meta, cfg, animated) {
+  let pipeline = sharp(input, { failOn: 'none', animated });
+  if (cfg.colorspace) pipeline = pipeline.toColorspace(cfg.colorspace);
+
+  const overMax =
+    cfg.maxSize > 0 && ((meta.width || 0) > cfg.maxSize || (meta.height || 0) > cfg.maxSize);
+  let resized = false;
+  if (cfg.square && cfg.maxSize > 0) {
+    pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, { fit: 'contain', background: cfg.bgColor });
+    resized = true;
+  } else if (overMax) {
+    pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, { fit: 'inside', withoutEnlargement: true });
+    resized = true;
+  }
+  if (cfg.trim && !cfg.square) pipeline = pipeline.trim();
+  return { pipeline, resized };
+}
+
+/** Direct encode path for animated GIF/WebP (no raw round-trip, no SSIM search). */
+async function optimizeAnimated(input, meta, cfg, format, resized, pipeline) {
+  if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ icc: 'srgb' });
+  if (format === 'webp') pipeline = pipeline.webp({ quality: cfg.webpQuality, effort: clampEffort(cfg.effort, 'webp') });
+  else pipeline = pipeline.gif({ colours: cfg.gifColors });
+  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
+  return { data, info, inputFormat: meta.format, outputFormat: format, resized, quality: null };
 }
 
 /**
@@ -75,56 +100,55 @@ function encode(pipeline, format, cfg, hasAlpha) {
  *
  * @param {Buffer|Uint8Array} input  encoded image bytes
  * @param {Partial<import('./config.js').DEFAULTS>} [options]
- * @returns {Promise<{ data: Buffer, info: sharp.OutputInfo, inputFormat: string, outputFormat: string, resized: boolean }>}
+ * @returns {Promise<{ data: Buffer, info: sharp.OutputInfo, inputFormat: string, outputFormat: string, resized: boolean, quality: number|null, ssim?: number|null }>}
  */
 export async function optimizeImageBuffer(input, options = {}) {
   const cfg = options.__resolved ? options : resolveConfig(options);
+  const inputBuf = Buffer.isBuffer(input) ? input : Buffer.from(input);
 
-  // failOn:'none' makes sharp tolerant of slightly-truncated/quirky files rather
-  // than throwing — corrupt files are surfaced by the caller, not by a hard crash.
-  const probe = sharp(input, { failOn: 'none' });
-  const meta = await probe.metadata();
+  const meta = await sharp(inputBuf, { failOn: 'none' }).metadata();
   const inputFormat = meta.format || 'unknown';
-
   const isAnimated = (meta.pages || 1) > 1 && (inputFormat === 'gif' || inputFormat === 'webp');
   const format = targetFormat(inputFormat, cfg);
-  // Animation only survives within gif<->webp; collapse to first frame otherwise.
   const keepAnimation = isAnimated && (format === 'gif' || format === 'webp');
 
-  let pipeline = sharp(input, { failOn: 'none', animated: keepAnimation });
+  const { pipeline, resized } = buildPipeline(inputBuf, meta, cfg, keepAnimation);
 
-  // 1) Color: normalize working space to sRGB. This is the in-memory replacement
-  //    for the old CMYK->RGB temp-file dance. sharp honors any embedded ICC
-  //    profile on the way in, then converts to sRGB.
-  if (cfg.colorspace) pipeline = pipeline.toColorspace(cfg.colorspace);
-
-  // 2) Geometry.
-  const overMax =
-    cfg.maxSize > 0 && ((meta.width || 0) > cfg.maxSize || (meta.height || 0) > cfg.maxSize);
-  let resized = false;
-  if (cfg.square && cfg.maxSize > 0) {
-    // Pad to a maxSize x maxSize canvas (replaces 2.9's manual extend() math).
-    pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, {
-      fit: 'contain',
-      background: cfg.bgColor,
-      withoutEnlargement: false,
-    });
-    resized = true;
-  } else if (overMax) {
-    pipeline = pipeline.resize(cfg.maxSize, cfg.maxSize, {
-      fit: 'inside',
-      withoutEnlargement: true,
-    });
-    resized = true;
+  if (keepAnimation) {
+    return optimizeAnimated(inputBuf, meta, cfg, format, resized, pipeline);
   }
-  if (cfg.trim && !cfg.square) pipeline = pipeline.trim();
 
-  // 3) Metadata: strip by default (smaller); re-embed sRGB ICC + EXIF if asked.
-  if (cfg.keepMetadata) pipeline = pipeline.withMetadata({ icc: 'srgb' });
+  // Flatten alpha for JPEG (no alpha channel) onto the configured background, so
+  // transparent regions don't go black on PNG/WebP -> JPEG conversions.
+  let prepared = pipeline;
+  if (format === 'jpeg' && meta.hasAlpha) prepared = prepared.flatten({ background: cfg.bgColor });
 
-  // 4) Encode.
-  pipeline = encode(pipeline, format, cfg, Boolean(meta.hasAlpha));
+  // Decode to raw pixels once, so the JPEG quality search can re-encode many
+  // candidates without redoing resize/colour each time.
+  const { data: rawBuf, info: rawInfo } = await prepared.raw().toBuffer({ resolveWithObject: true });
 
-  const { data, info } = await pipeline.toBuffer({ resolveWithObject: true });
-  return { data, info, inputFormat, outputFormat: format, resized };
+  if (format === 'jpeg') {
+    const ctx = {
+      inputBytes: inputBuf.length,
+      inputFormat,
+      inputBuffer: inputBuf,
+      // Only safe to pass the original through untouched if we didn't change pixels.
+      transformed: resized || cfg.trim || cfg.square,
+    };
+    const r = await encodeJpeg(rawBuf, rawInfo, cfg, ctx);
+    const info = await sharp(r.data).metadata();
+    return {
+      data: r.data,
+      info: { format: 'jpeg', width: info.width, height: info.height, size: r.data.length },
+      inputFormat,
+      outputFormat: 'jpeg',
+      resized,
+      quality: r.quality,
+      ssim: r.ssim,
+      engine: r.engine,
+    };
+  }
+
+  const { data, info } = await encodeRawNonJpeg(rawBuf, rawInfo, format, cfg);
+  return { data, info, inputFormat, outputFormat: format, resized, quality: null };
 }
