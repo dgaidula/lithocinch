@@ -85,8 +85,8 @@ process-images ./photos --dry-run --verbose
 | `--jpeg-min` / `--jpeg-max` | `30` / `60` | Adaptive JPEG quality search band |
 | `--jpeg-mode <mode>` | `recompress` | `recompress` (adaptive) or `fixed` |
 | `--jpeg-quality <n>` | `80` | Fixed JPEG quality (only with `--jpeg-mode fixed`) |
-| `--png-quality <n>` | `80` | PNG palette quality (libimagequant) |
-| `--png-min-ssim <n>` | `0.85` | Fall back to lossless if a palette PNG scores below this SSIM |
+| `--png-quality <n>` | `100` | PNG palette quality search ceiling (libimagequant) |
+| `--png-min-ssim <n>` | `0.92` | Palette must clear this SSIM, else fall back to lossless |
 | `--png-engine <e>` | `auto` | `auto` (shootout) / `sharp` (libimagequant) / `pngquant` (binary) |
 | `--gif-engine <e>` | `auto` | `auto` (lossless gifsicle pass when available) / `sharp` / `gifsicle` |
 | `--overwrite` | off | Reprocess even if output already exists |
