@@ -186,4 +186,6 @@ too slow to reliably block a cold first request.
 5. On-upload optimization (layer A) + cap config.
 6. Bulk utility + savings dashboard; queue jobs.
 7. `remote` driver + the hosted Lambda; Pro edition gating.
-8. SAM/CDK + Dockerfile for Lambda packaging.
+8. ~~SAM + Dockerfile for Lambda packaging~~ **[done]** — `lambda/Dockerfile`,
+   `lambda/template.yaml`, `lambda/README.md` (container image, arm64, Function
+   URL, `PI_TOKEN` auth).

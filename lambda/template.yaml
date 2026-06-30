@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  process-images transform API — the `remote` backend driver for the Crisp Craft
+  plugin (and any HTTP caller). POST a transform request, get optimized bytes back.
+
+Parameters:
+  AuthToken:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >
+      Bearer token required on POST /transform (set as PI_TOKEN). Empty = no auth
+      (only acceptable behind your own gateway/VPN). The handler enforces it.
+
+Globals:
+  Function:
+    Timeout: 30          # AVIF/auto shootout on large images can be slow
+    MemorySize: 2048     # more memory = more vCPU on Lambda; sharp/AVIF is CPU-bound
+
+Resources:
+  TransformFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ../
+      Dockerfile: lambda/Dockerfile
+    Properties:
+      PackageType: Image
+      Architectures: [arm64]
+      Environment:
+        Variables:
+          PI_TOKEN: !Ref AuthToken
+      FunctionUrlConfig:
+        AuthType: NONE   # auth is the PI_TOKEN bearer check in the handler
+        Cors:
+          AllowOrigins: ['*']
+          AllowMethods: [POST]
+          AllowHeaders: [content-type, authorization]
+
+Outputs:
+  FunctionUrl:
+    Description: Set this as `apiUrl` in the Crisp plugin (driver = remote).
+    Value: !GetAtt TransformFunctionUrl.FunctionUrl

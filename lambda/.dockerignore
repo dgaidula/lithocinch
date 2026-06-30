@@ -1,0 +1,8 @@
+node_modules
+.git
+test
+img-optimize-output
+img-optimize-error
+*.log
+dist
+*.zip
