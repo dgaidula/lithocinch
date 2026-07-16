@@ -1,4 +1,4 @@
-# process-images — research log & encoding decisions
+# lithocinch — research log & encoding decisions
 
 A living record of *why* each codec is configured the way it is, with the
 measurements behind the decisions. Companion to `NOTES.md` (which maps the old
@@ -288,9 +288,9 @@ To drive the tool from a CMS (Craft), a build step, or any non-Node host, there'
 a single-image **transform API** layered over the same core (`src/transform-api.js`,
 `runTransform()`), reachable three ways that share one request/response contract:
 
-- **CLI** (`process-images transform`): JSON request on stdin → JSON (base64) on
+- **CLI** (`lithocinch transform`): JSON request on stdin → JSON (base64) on
   stdout. The shell-out backend for hosts that have Node.
-- **HTTP daemon** (`process-images serve`, `src/server.js`): persistent, warm
+- **HTTP daemon** (`lithocinch serve`, `src/server.js`): persistent, warm
   sharp; `POST /transform`, `GET /health`, optional bearer token.
 - **Lambda** (`lambda/transform.js`): the identical handler behind a Function URL
   — the backend for hosts that can't run Node.

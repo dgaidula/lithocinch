@@ -1,4 +1,4 @@
-# process-images
+# lithocinch
 
 Fast, batch image optimizer built on [**sharp**](https://sharp.pixelplumbing.com/)
 and [**svgo**](https://github.com/svg/svgo). Point it at a folder and it will,
@@ -31,24 +31,24 @@ ships prebuilt libvips, which is also Lambda-compatible.
 
 ```bash
 # global CLI
-npm install -g process-images
+npm install -g lithocinch
 
 # or per-project / as a library
-npm install process-images
+npm install lithocinch
 ```
 
 Or from a clone:
 
 ```bash
-git clone <repo> process-images && cd process-images
+git clone <repo> lithocinch && cd lithocinch
 npm install
-npm link        # optional: puts `process-images` on your PATH
+npm link        # optional: puts `lithocinch` on your PATH
 ```
 
 ## CLI usage
 
 ```bash
-process-images [input-dir] [options]
+lithocinch [input-dir] [options]
 ```
 
 Run it from (or point it at) the folder of images. By default it writes to a
@@ -56,16 +56,16 @@ sibling `../img-optimize-output/` folder and skips files already optimized there
 
 ```bash
 # optimize the current folder with defaults
-process-images
+lithocinch
 
 # a specific folder, custom output, force everything to WebP at 1600px
-process-images ./photos -o ./web --format webp --max-size 1600
+lithocinch ./photos -o ./web --format webp --max-size 1600
 
 # square-pad product shots onto a white canvas, higher JPEG quality
-process-images ./products --square --bg-color "#ffffff" --jpeg-quality 90
+lithocinch ./products --square --bg-color "#ffffff" --jpeg-quality 90
 
 # see what would happen without writing anything
-process-images ./photos --dry-run --verbose
+lithocinch ./photos --dry-run --verbose
 ```
 
 ### Common options
@@ -96,7 +96,7 @@ process-images ./photos --dry-run --verbose
 | `--dry-run` | off | Plan only; write nothing |
 | `--json` | off | Print summary as JSON |
 
-Run `process-images --help` for the complete list (color, trim, metadata, AVIF,
+Run `lithocinch --help` for the complete list (color, trim, metadata, AVIF,
 SVG, error-dir, etc.). Every option also exists as a library option key — see
 the mapping table in [NOTES.md](./NOTES.md).
 
@@ -106,7 +106,7 @@ Let the tool choose the smallest format for each image — it encodes the viable
 candidates and ships the winner, changing the extension to match:
 
 ```bash
-process-images ./images --format auto --manifest ./out/manifest.json
+lithocinch ./images --format auto --manifest ./out/manifest.json
 ```
 
 ```
@@ -135,7 +135,7 @@ See [RESEARCH.md §9](./RESEARCH.md) for the candidate-pool and tie-break rules.
 primary), so you get a modern-format set without changing the original:
 
 ```bash
-process-images ./photos --emit webp,avif
+lithocinch ./photos --emit webp,avif
 #  photo.jpg  ->  photo_opt.jpg   (primary, optimized)
 #               + photo_opt.webp  (content-aware)
 #               + photo_opt.avif  (content-aware)
@@ -162,8 +162,8 @@ The same `runTransform()` core is reachable three ways — pick per host:
 
 | Transport | Command | Use |
 |---|---|---|
-| **CLI** (stdin→stdout JSON) | `process-images transform` | shell out from PHP/anything; needs Node on the box |
-| **HTTP daemon** | `process-images serve` | persistent, warm sharp; POST from localhost |
+| **CLI** (stdin→stdout JSON) | `lithocinch transform` | shell out from PHP/anything; needs Node on the box |
+| **HTTP daemon** | `lithocinch serve` | persistent, warm sharp; POST from localhost |
 | **AWS Lambda** | `lambda/transform.js` | hosts that can't run Node; same logic, Function URL |
 
 **Bytes in, bytes out — stateless and storage-agnostic.** The caller reads the
@@ -201,18 +201,18 @@ never touches storage. So it works with any backend, including the
 
 ```bash
 # one-shot, from a file (testing)
-process-images transform --in photo.jpg --ops '{"width":800}' --format auto --out out.avif
+lithocinch transform --in photo.jpg --ops '{"width":800}' --format auto --out out.avif
 
 # one-shot, JSON on stdin (the shell-out contract)
-echo '{"image":"...","ops":{"width":800},"format":"auto"}' | process-images transform
+echo '{"image":"...","ops":{"width":800},"format":"auto"}' | lithocinch transform
 
 # persistent daemon (warm), optional bearer token
-process-images serve --port 4111 --token "$PI_TOKEN"
+lithocinch serve --port 4111 --token "$PI_TOKEN"
 curl -s localhost:4111/transform -H "authorization: Bearer $PI_TOKEN" \
   -d '{"image":"...","ops":{"width":800},"format":"auto"}'
 ```
 
-The Lambda (`process-images/lambda/transform`) takes the identical JSON body via a
+The Lambda (`lithocinch/lambda/transform`) takes the identical JSON body via a
 Function URL / API Gateway v2 event and honors `PI_TOKEN`.
 
 ## Library usage
@@ -224,7 +224,7 @@ import {
   optimizeBytes,       // any image bytes + filename -> { data, outName, ... } (pure)
   optimizeFile,        // one file on disk -> optimized file
   processDirectory,    // whole tree -> mirrored output tree
-} from 'process-images';
+} from 'lithocinch';
 
 // In-memory, framework-agnostic:
 const { data, info } = await optimizeImageBuffer(inputBuffer, {
@@ -288,11 +288,11 @@ sweet spot instead of a one-size-fits-all quality.
 
 ```bash
 # loosen or tighten the perceptual target
-process-images ./photos --jpeg-target 0.997
+lithocinch ./photos --jpeg-target 0.997
 # widen the quality band
-process-images ./photos --jpeg-min 35 --jpeg-max 75
+lithocinch ./photos --jpeg-min 35 --jpeg-max 75
 # see the chosen quality + SSIM per file
-process-images ./photos --verbose         # ... scene.jpg -> scene.jpg (685KB -> 30KB q58 ssim0.9951)
+lithocinch ./photos --verbose         # ... scene.jpg -> scene.jpg (685KB -> 30KB q58 ssim0.9951)
 ```
 
 The built-in engine (`sharp-ssim`) needs no native binary, so it runs in Lambda
@@ -300,7 +300,7 @@ too. For **byte-exact parity** with the original `jpeg-recompress` binary:
 
 ```bash
 brew install jpeg-archive   # provides the `jpeg-recompress` binary
-process-images ./photos --jpeg-engine jpeg-recompress
+lithocinch ./photos --jpeg-engine jpeg-recompress
 ```
 
 Its SSIM is the standard Wang metric and is *close to* — not identical to —
@@ -323,9 +323,9 @@ depends on the content, not the source extension:
 | animated GIF | smaller, frames kept | animated **lossy** WebP |
 
 ```bash
-process-images ./photos --format webp                 # auto per image
-process-images ./ui --format webp --webp-mode lossless # force lossless
-process-images ./photos --format webp --webp-target 0.985  # looser = smaller
+lithocinch ./photos --format webp                 # auto per image
+lithocinch ./ui --format webp --webp-mode lossless # force lossless
+lithocinch ./photos --format webp --webp-target 0.985  # looser = smaller
 ```
 
 A photographic source is detected from the JPEG marker or a high distinct-colour

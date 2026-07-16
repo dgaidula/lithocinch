@@ -1,4 +1,4 @@
-# process-images — agent guide
+# lithocinch — agent guide
 
 Fast, batch + on-demand image optimizer on **sharp** + **svgo**. ESM, Node ≥ 20.
 3.x rewrite of the long-lived `process-images-2.9.js`. Runs four ways from one
@@ -44,4 +44,4 @@ Optional binaries that the `auto` engines use when present: `pngquant`,
 ## Status / next
 Feature-complete optimizer (still/animated/vector, auto-format, manifest) + the
 transform-service backbone. The companion **Craft plugin** lives at
-`../craft-crisp`. Next: native Craft `ImageTransformer`, on-upload optimization.
+`../craft-lithocinch`. Next: native Craft `ImageTransformer`, on-upload optimization.

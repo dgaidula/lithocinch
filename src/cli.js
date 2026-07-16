@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Command-line front end for process-images. Every knob that was a hard-coded
+// Command-line front end for lithocinch. Every knob that was a hard-coded
 // constant in process-images-2.9.js is exposed here as a flag (see NOTES.md).
 
 import { readFileSync } from 'node:fs';
@@ -29,7 +29,7 @@ if (sub === 'serve' || sub === 'transform') {
 const program = new Command();
 
 program
-  .name('process-images')
+  .name('lithocinch')
   .description(
     'Batch image optimizer (sharp + svgo). Caps dimensions, normalizes color to ' +
       'sRGB, compresses JPEG/PNG/GIF/WebP/AVIF/TIFF and SVG, and mirrors the input ' +

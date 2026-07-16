@@ -1,4 +1,4 @@
-# process-images 3.x — design notes & migration from 2.9
+# lithocinch 3.x — design notes & migration from 2.9
 
 This file documents the rewrite decisions, the **internal-variable → CLI-flag
 hoisting** you asked for, and the things that changed behaviorally so you aren't

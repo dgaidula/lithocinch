@@ -1,6 +1,6 @@
-# process-images → Craft CMS plugin: architecture spec
+# lithocinch → Craft CMS plugin: architecture spec
 
-Design doc for the CMS-facing product built on top of the `process-images` core.
+Design doc for the CMS-facing product built on top of the `lithocinch` core.
 Captures decisions, the service backbone (already built), and the Craft plugin
 (to build). Keep this current as decisions land.
 
@@ -15,7 +15,7 @@ plugin repo) · **[decision]** settled choice.
 Craft template / upload  ──▶  Craft plugin (PHP)
                                  │  reads source bytes via Craft Fs (GCS/S3/local)
                                  ▼
-                          backend driver  ──▶  process-images core (Node/sharp)
+                          backend driver  ──▶  lithocinch core (Node/sharp)
                             cli | daemon | remote        resize + perceptual + auto-format
                                  ▲
                                  │  optimized bytes back; plugin writes via Craft Fs
@@ -36,8 +36,8 @@ One request/response contract, three transports, one `runTransform()` core
 
 | Transport | Entry | Driver it powers |
 |---|---|---|
-| CLI (stdin→stdout JSON) | `process-images transform` (`src/cli-service.js`) | `cli` |
-| HTTP daemon | `process-images serve` (`src/server.js`) | `daemon` |
+| CLI (stdin→stdout JSON) | `lithocinch transform` (`src/cli-service.js`) | `cli` |
+| HTTP daemon | `lithocinch serve` (`src/server.js`) | `daemon` |
 | AWS Lambda | `lambda/transform.js` (Function URL / API GW v2) | `remote` |
 
 Contract (image as base64; `batch` = one source → many outputs for `<picture>`):
@@ -181,7 +181,10 @@ too slow to reliably block a cold first request.
 ## 11. Roadmap
 1. ~~Service backbone (transform/serve/Lambda)~~ **[done]**
 2. Craft plugin skeleton: Plugin class, settings, editions, CraftVariable.
-3. `ImageTransformer` + the `cli` driver; register as default; dogfood on CAF/TLB.
+3. ~~`ImageTransformer` + the `cli` driver; register as default~~ **[built]** —
+   `craft-lithocinch/src/imagetransforms/LithoTransformer.php`, opt-in via
+   `useAsDefaultTransformer`. Still to do: **dogfood on CAF/TLB** (live DDEV render
+   test — see `craft-lithocinch/docs/DDEV-TESTING.md`).
 4. `picture()`/`srcset()` Twig helpers (batch requests).
 5. On-upload optimization (layer A) + cap config.
 6. Bulk utility + savings dashboard; queue jobs.
