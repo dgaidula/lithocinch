@@ -23,7 +23,8 @@
     "NOTES.md",
     "RESEARCH.md",
     "SPEC.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=20"
@@ -54,8 +55,8 @@
     "lambda",
     "cli"
   ],
-  "author": "Dan Gaidula <dan@iceboxind.com>",
-  "license": "UNLICENSED",
+  "author": "Danniel T. Gaidula <dan@iceboxind.com>",
+  "license": "Apache-2.0",
   "dependencies": {
     "cli-progress": "^3.12.0",
     "commander": "^15.0.0",

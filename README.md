@@ -1,4 +1,28 @@
-# lithocinch
+# Lithocinch
+
+**Perceptually-lossless, best-format image optimization — measured, not guessed.**
+*Lithographic quality, cinched.*
+
+Most optimizers ship a fixed `quality: 82` and hope. Lithocinch **measures**: it
+binary-searches the encoder quality per image against a structural-similarity
+(**SSIM**) target — landing on the smallest file that’s still perceptually identical
+to the source — then runs a **format shootout** (AVIF / WebP / JPEG / PNG) and ships
+the smallest one the client can actually display.
+
+### Results
+
+Real output, verified end-to-end through a Craft CMS site writing to Google Cloud Storage:
+
+| Source | Optimized (800px) | Reduction |
+|---|---|---|
+| 1,644 KB PNG | **13 KB AVIF** | **−99.2%**, perceptually lossless |
+
+**[RESEARCH.md](./RESEARCH.md)** documents *why* each codec behaves as it does, with
+measured numbers — the methodology, not marketing.
+
+One engine, four runtimes: **CLI · library · AWS Lambda · [Craft CMS plugin](https://github.com/dgaidula/craft-lithocinch)**.
+
+---
 
 Fast, batch image optimizer built on [**sharp**](https://sharp.pixelplumbing.com/)
 and [**svgo**](https://github.com/svg/svgo). Point it at a folder and it will,
