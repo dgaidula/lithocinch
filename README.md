@@ -405,4 +405,4 @@ npm start -- --help
 
 ## License
 
-MIT © Dan Gaidula
+[Apache-2.0](./LICENSE) © 2026 Danniel T. Gaidula
