@@ -136,7 +136,7 @@ variants also live in GCS (the transform Fs) and are purgeable; they're tiny
 | Driver | Needs | Use | Edition |
 |---|---|---|---|
 | `cli` | Node + tool on server (Symfony Process) | most Craft VPS/managed | Lite |
-| `daemon` | Node + kept-alive `serve` process | high-volume self-host | Lite/Pro |
+| `daemon` | Node + kept-alive `serve` process | high-volume self-host | Pro |
 | `remote` | HTTP + API key (the Lambda) | any host, incl. no-Node | Pro / hosted |
 
 ## 6. Caching, storage, invalidation — **[todo]**
