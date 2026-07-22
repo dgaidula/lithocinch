@@ -1,4 +1,4 @@
-# Container image for the transform Lambda (the Crisp `remote` driver).
+# Container image for the transform Lambda (the Lithocinch `remote` driver).
 # Building on the matching Lambda base image gets the correct prebuilt sharp
 # binary for the platform — the reliable path for native deps on Lambda.
 #

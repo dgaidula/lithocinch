@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  process-images transform API — the `remote` backend driver for the Crisp Craft
+  lithocinch transform API — the `remote` backend driver for the Lithocinch Craft
   plugin (and any HTTP caller). POST a transform request, get optimized bytes back.
 
 Parameters:
@@ -39,5 +39,5 @@ Resources:
 
 Outputs:
   FunctionUrl:
-    Description: Set this as `apiUrl` in the Crisp plugin (driver = remote).
+    Description: Set this as `apiUrl` in the Lithocinch plugin (driver = remote).
     Value: !GetAtt TransformFunctionUrl.FunctionUrl

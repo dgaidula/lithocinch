@@ -1,4 +1,4 @@
-# Deploying the transform Lambda (Crisp `remote` driver)
+# Deploying the transform Lambda (Lithocinch `remote` driver)
 
 Two handlers live here:
 

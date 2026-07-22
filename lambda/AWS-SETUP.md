@@ -7,7 +7,7 @@ dollars** (see Cost, bottom). Read it once top-to-bottom, then work the boxes.
 
 This deploys `lithocinch/lambda/` — a container-image Lambda (arm64) that
 takes a POST with an image and returns optimized bytes. It becomes the `remote`
-driver for the Crisp Craft plugin.
+driver for the Lithocinch Craft plugin.
 
 ---
 
@@ -19,7 +19,7 @@ driver for the Crisp Craft plugin.
 | **CloudFormation** | `package-lock.json` for cloud infra — a declarative manifest of everything to create, created/destroyed as one unit ("a stack"). |
 | **SAM** | A thin `npm`-like CLI wrapper over CloudFormation for serverless. `sam deploy` = "npm install, but it builds a Lambda." |
 | **ECR** | A private Docker registry (like npm's registry but for images). SAM pushes your built image here automatically. |
-| **Lambda Function URL** | A plain HTTPS endpoint for the function — no API Gateway needed. This is the URL you'll `curl` and paste into Crisp. |
+| **Lambda Function URL** | A plain HTTPS endpoint for the function — no API Gateway needed. This is the URL you'll `curl` and paste into Lithocinch. |
 
 You do **not** need to touch API Gateway, VPCs, S3, or the console much. SAM does
 almost everything from the terminal.
@@ -92,7 +92,7 @@ From `lithocinch/lambda/`:
 - [ ] `sam build` — builds the Docker image locally (first run pulls the base
       image; slow once, cached after).
 - [ ] `sam deploy --guided` — interactive first deploy. Answer the prompts:
-  - **Stack name:** `crisp-transform` (any name; this is the CloudFormation unit).
+  - **Stack name:** `lithocinch-transform` (any name; this is the CloudFormation unit).
   - **Region:** your Phase-0 region.
   - **Parameter AuthToken:** paste a long random string — this becomes `PI_TOKEN`,
     the bearer token callers must send. Generate one: `openssl rand -hex 24`.
@@ -135,9 +135,9 @@ From `lithocinch/lambda/`:
 
 ---
 
-## Phase 5 — Wire it into Crisp (2 min)
+## Phase 5 — Wire it into Lithocinch (2 min)
 
-- [ ] In the Crisp plugin settings (or `config/crisp.php`): set `driver = remote`,
+- [ ] In the Lithocinch plugin settings (or `config/litho.php`): set `driver = remote`,
       `apiUrl = <FunctionUrl>`, and the API key/token to your `PI_TOKEN`.
 - [ ] Load a page that renders an optimized image and confirm it routes through the
       Lambda. Done — the hosted path is live.
@@ -146,7 +146,7 @@ From `lithocinch/lambda/`:
 
 ## Phase 6 — Teardown whenever you want (the anxiety-killer)
 
-- [ ] `sam delete` (from `lambda/`, or `sam delete --stack-name crisp-transform`).
+- [ ] `sam delete` (from `lambda/`, or `sam delete --stack-name lithocinch-transform`).
       This destroys the Lambda, Function URL, ECR image, and IAM role — the whole
       stack — so billing returns to exactly zero. You can redeploy any time with
       `sam deploy`.
