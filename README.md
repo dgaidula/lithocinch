@@ -98,7 +98,7 @@ lithocinch ./photos --dry-run --verbose
 |---|---|---|
 | `[input]` | `.` | Input directory (recursive) |
 | `-o, --output <dir>` | `../img-optimize-output/` | Output directory |
-| `-s, --suffix <str>` | `_opt` | Inserted before each file's extension |
+| `-s, --suffix <str>` | `_lco` | Inserted before each file's extension |
 | `-m, --max-size <px>` | `2560` | Cap width & height (`0` / `--no-resize` to disable) |
 | `-f, --format <fmt>` | *keep* | `jpeg`/`png`/`webp`/`avif`/`gif`/`tiff`, or **`auto`** (smallest per image) |
 | `--manifest <path>` | — | JSON `source → output` map; enables `--format auto` skip-detection |
@@ -123,6 +123,13 @@ lithocinch ./photos --dry-run --verbose
 Run `lithocinch --help` for the complete list (color, trim, metadata, AVIF,
 SVG, error-dir, etc.). Every option also exists as a library option key — see
 the mapping table in [NOTES.md](./NOTES.md).
+
+> **Legacy suffix (`_opt`).** As of 3.1.0 the default output suffix is `_lco`
+> (“lithocinch optimized”), replacing the generic `_opt` that carried over from
+> the original `process-images` script. To restore the old behavior — e.g. for a
+> tree already built with `photo_opt.*` names — pass `-s _opt` (or `--suffix _opt`),
+> or set `suffix: '_opt'` when calling the library. `-s ''` drops the suffix
+> entirely (`photo.jpg` → `photo.avif`).
 
 ## Auto-pick the best format (`--format auto`)
 
@@ -160,9 +167,9 @@ primary), so you get a modern-format set without changing the original:
 
 ```bash
 lithocinch ./photos --emit webp,avif
-#  photo.jpg  ->  photo_opt.jpg   (primary, optimized)
-#               + photo_opt.webp  (content-aware)
-#               + photo_opt.avif  (content-aware)
+#  photo.jpg  ->  photo_lco.jpg   (primary, optimized)
+#               + photo_lco.webp  (content-aware)
+#               + photo_lco.avif  (content-aware)
 ```
 
 Each sibling uses that codec's content-aware/perceptual settings. The primary
@@ -172,9 +179,9 @@ AVIFs. Pair with `<picture>`:
 
 ```html
 <picture>
-  <source srcset="photo_opt.avif" type="image/avif">
-  <source srcset="photo_opt.webp" type="image/webp">
-  <img src="photo_opt.jpg" alt="">
+  <source srcset="photo_lco.avif" type="image/avif">
+  <source srcset="photo_lco.webp" type="image/webp">
+  <img src="photo_lco.jpg" alt="">
 </picture>
 ```
 

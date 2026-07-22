@@ -229,7 +229,7 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | *(implicit cwd)* | `.` | `[input]` positional | `input` | now an explicit arg, default `.` |
 | `outPath` | `../img-optimize-output/` | `-o, --output` | `output` | |
 | `errorPath` | `../img-optimize-error/` | `--error-dir` | `errorDir` | |
-| `outputAppend` | `_opt` | `-s, --suffix` | `suffix` | |
+| `outputAppend` | `_lco` | `-s, --suffix` | `suffix` | |
 | `overwriteFiles` | `false` | `--overwrite` | `overwrite` | |
 | `maxSize` | `2560` | `-m, --max-size` | `maxSize` | `0` (or `--no-resize`) disables; this is the 2.8 "skip maxSize" switch |
 | `onSquare` | `false` | `--square` | `square` | now uses sharp `fit:contain` instead of manual `extend()` |

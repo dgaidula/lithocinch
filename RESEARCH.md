@@ -251,7 +251,7 @@ so it's "run N encoders on shared pixels, compare, pick" (`src/best-format.js`).
   WebP (see §9a).
 - **The manifest is essential** because extensions change. `--manifest out.json`
   records `input → output, format, bytes` for every file (primary + emitted), so
-  build tools / HTML rewriting know `hero.jpg` became `hero_opt.avif`. Re-runs
+  build tools / HTML rewriting know `hero.jpg` became `hero_lco.avif`. Re-runs
   read it for **skip-detection** (the output name can't be predicted from the
   input under `auto`, unlike fixed formats). Without a manifest, `auto`
   reprocesses every run.

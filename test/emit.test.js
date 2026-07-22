@@ -28,13 +28,13 @@ const exists = (p) => fs.access(p).then(() => true).catch(() => false);
 test('emit writes sibling formats next to the primary, skipping svg', async () => {
   const { root, input, output } = await tmpTree();
   try {
-    const stats = await processDirectory({ input, output, suffix: '_opt', emit: ['webp', 'avif'], maxSize: 0 });
+    const stats = await processDirectory({ input, output, suffix: '_lco', emit: ['webp', 'avif'], maxSize: 0 });
     assert.equal(stats.emitted, 2, 'one webp + one avif for the single raster');
-    assert.ok(await exists(path.join(output, 'photo_opt.jpg')), 'primary jpg');
-    assert.ok(await exists(path.join(output, 'photo_opt.webp')), 'webp sibling');
-    assert.ok(await exists(path.join(output, 'photo_opt.avif')), 'avif sibling');
+    assert.ok(await exists(path.join(output, 'photo_lco.jpg')), 'primary jpg');
+    assert.ok(await exists(path.join(output, 'photo_lco.webp')), 'webp sibling');
+    assert.ok(await exists(path.join(output, 'photo_lco.avif')), 'avif sibling');
     // svg gets no raster siblings
-    assert.ok(!(await exists(path.join(output, 'icon_opt.webp'))));
+    assert.ok(!(await exists(path.join(output, 'icon_lco.webp'))));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -44,9 +44,9 @@ test('emit de-duplicates the primary format', async () => {
   const { root, input, output } = await tmpTree();
   try {
     // primary forced to webp; emitting webp must NOT double-write it
-    const stats = await processDirectory({ input, output, suffix: '_opt', format: 'webp', emit: ['webp', 'avif'], maxSize: 0 });
-    assert.ok(await exists(path.join(output, 'photo_opt.webp')), 'primary webp');
-    assert.ok(await exists(path.join(output, 'photo_opt.avif')), 'avif sibling');
+    const stats = await processDirectory({ input, output, suffix: '_lco', format: 'webp', emit: ['webp', 'avif'], maxSize: 0 });
+    assert.ok(await exists(path.join(output, 'photo_lco.webp')), 'primary webp');
+    assert.ok(await exists(path.join(output, 'photo_lco.avif')), 'avif sibling');
     assert.equal(stats.emitted, 1, 'only avif emitted; webp == primary');
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -56,12 +56,12 @@ test('emit de-duplicates the primary format', async () => {
 test('emit fills in a missing sibling even when the primary is already present', async () => {
   const { root, input, output } = await tmpTree();
   try {
-    await processDirectory({ input, output, suffix: '_opt', emit: ['webp', 'avif'], maxSize: 0 });
-    await fs.rm(path.join(output, 'photo_opt.webp')); // delete one sibling
-    const stats = await processDirectory({ input, output, suffix: '_opt', emit: ['webp', 'avif'], maxSize: 0 });
+    await processDirectory({ input, output, suffix: '_lco', emit: ['webp', 'avif'], maxSize: 0 });
+    await fs.rm(path.join(output, 'photo_lco.webp')); // delete one sibling
+    const stats = await processDirectory({ input, output, suffix: '_lco', emit: ['webp', 'avif'], maxSize: 0 });
     assert.equal(stats.processed, 0, 'primary already present -> skipped');
     assert.equal(stats.emitted, 1, 'only the missing webp re-emitted');
-    assert.ok(await exists(path.join(output, 'photo_opt.webp')));
+    assert.ok(await exists(path.join(output, 'photo_lco.webp')));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

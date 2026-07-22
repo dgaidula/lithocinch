@@ -12,7 +12,7 @@ export const DEFAULTS = Object.freeze({
   input: '.', // directory to read from (was implicit cwd)
   output: '../img-optimize-output/', // was const outPath
   errorDir: '../img-optimize-error/', // was const errorPath
-  suffix: '_opt', // was const outputAppend
+  suffix: '_lco', // "lithocinch optimized" (was const outputAppend; formerly '_opt')
   overwrite: false, // was const overwriteFiles
   flatten: false, // NEW: drop the source subdir tree, write everything flat
 
@@ -148,7 +148,7 @@ export const DEFAULTS = Object.freeze({
 
   // ---- additional outputs ----
   // Formats to ALSO emit next to each optimized raster (for <picture> fallbacks):
-  // e.g. ['webp','avif'] writes photo_opt.jpg + photo_opt.webp + photo_opt.avif.
+  // e.g. ['webp','avif'] writes photo_lco.jpg + photo_lco.webp + photo_lco.avif.
   // Each uses that codec's content-aware/perceptual settings. Skips the format
   // that already equals the primary output.
   emit: [],

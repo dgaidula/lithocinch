@@ -40,7 +40,7 @@ program
   // --- output layout ---
   .option('-o, --output <dir>', 'output directory', '../img-optimize-output/')
   .option('--error-dir <dir>', 'where to copy files that fail to process', '../img-optimize-error/')
-  .option('-s, --suffix <str>', 'string inserted before the extension of each output file', '_opt')
+  .option('-s, --suffix <str>', 'string inserted before the extension of each output file', '_lco')
   .option('--overwrite', 'reprocess files even if the output already exists', false)
   .option('--flatten', 'drop the source subfolder tree; write all output files flat', false)
   .option('--emit <formats>', 'also write these formats beside each raster (e.g. "webp,avif") for <picture> fallbacks')

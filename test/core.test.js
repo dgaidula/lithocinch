@@ -18,13 +18,13 @@ const makePng = (w, h) =>
 
 // --- naming --------------------------------------------------------------
 test('buildOutputName inserts suffix before extension', () => {
-  assert.equal(buildOutputName('photo.jpg', { suffix: '_opt' }), 'photo_opt.jpg');
+  assert.equal(buildOutputName('photo.jpg', { suffix: '_lco' }), 'photo_lco.jpg');
 });
 
 test('buildOutputName rewrites extension on format change', () => {
   assert.equal(
-    buildOutputName('a/b/pic.png', { suffix: '_opt', outputFormat: 'jpeg' }),
-    'a/b/pic_opt.jpg'
+    buildOutputName('a/b/pic.png', { suffix: '_lco', outputFormat: 'jpeg' }),
+    'a/b/pic_lco.jpg'
   );
 });
 
@@ -94,9 +94,9 @@ test('optimizeBytes derives svg output name and shrinks markup', async () => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
     <!-- a comment -->   <rect x="0" y="0" width="10" height="10" fill="#ff0000"/>
   </svg>`;
-  const res = await optimizeBytes(svg, 'icon.svg', { suffix: '_opt' });
+  const res = await optimizeBytes(svg, 'icon.svg', { suffix: '_lco' });
   assert.equal(res.kind, 'svg');
-  assert.equal(res.outName, 'icon_opt.svg');
+  assert.equal(res.outName, 'icon_lco.svg');
   assert.ok(res.data.length < Buffer.byteLength(svg));
   assert.ok(res.data.toString().includes('viewBox')); // viewBox preserved by default
 });

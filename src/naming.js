@@ -25,7 +25,7 @@ const EXT_FOR_FORMAT = {
  *
  * @param {string} name        original filename (basename or relative path)
  * @param {object} opts
- * @param {string} [opts.suffix='']        e.g. "_opt"
+ * @param {string} [opts.suffix='']        e.g. "_lco"
  * @param {string|null} [opts.outputFormat] sharp format name if it changed, else null/undefined
  * @param {boolean} [opts.lowercaseExt=false]
  * @param {string} [opts.spaceChar='_']
