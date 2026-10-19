@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { Command, Option } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import cliProgress from 'cli-progress';
 import pc from 'picocolors';
 
@@ -140,7 +140,8 @@ program
   .option('-q, --quiet', 'suppress the progress bar and per-file logging', false)
   .option('--verbose', 'log every file as it is processed', false)
   .option('--json', 'print the final summary as JSON', false)
-  .showHelpAfterError();
+  .showHelpAfterError()
+  .exitOverride(); // usage errors exit 2, like the sub-commands (see the parseAsync catch below)
 
 program.action(async (input, opts) => {
   const options = {
@@ -320,6 +321,11 @@ function truncate(s, max = 40) {
   return s.length > max ? '…' + s.slice(-(max - 1)) : s;
 }
 
-program.parseAsync(process.argv);
+// Commander has already printed the message (or the help / version); only the
+// exit status changes: 0 for help and --version, 2 for a usage error, not its 1.
+program.parseAsync(process.argv).catch((err) => {
+  if (!(err instanceof CommanderError)) throw err;
+  process.exitCode = err.exitCode === 0 ? 0 : 2;
+});
 
 } // end of directory-optimize command (see the `serve`/`transform` dispatch above)

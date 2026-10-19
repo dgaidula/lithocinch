@@ -60,7 +60,7 @@ export async function runSubcommand(name, argv, version) {
   if (name === 'transform') return transform(argv, version);
 }
 
-// --- process-images serve [--port N] [--host H] [--token T] [--max-body MB] ---
+// --- lithocinch serve [--port N] [--host H] [--token T] [--max-body MB] ---
 async function serve(argv, version) {
   const values = parseFlags('serve', argv, {
     port: { type: 'string', default: process.env.PI_PORT || '0' },
@@ -77,13 +77,13 @@ async function serve(argv, version) {
     version,
   });
   process.stderr.write(
-    `process-images serve ${version} listening on http://${host}:${port}` +
+    `lithocinch serve ${version} listening on http://${host}:${port}` +
       `${values.token ? ' (token auth on)' : ''}\n  POST /transform  ·  GET /health\n`
   );
   // keep the process alive
 }
 
-// --- process-images transform ---
+// --- lithocinch transform ---
 // Default: read a JSON request {image:base64, ops, format, batch, defaults} on
 // stdin, write {outputs:[{...,data:base64}]} to stdout. Convenience flags let you
 // transform a file directly for testing.

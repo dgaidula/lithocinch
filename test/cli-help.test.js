@@ -29,3 +29,34 @@ for (const sub of ['transform', 'serve']) {
     assert.match(lines[0], /--bogus/);
   });
 }
+
+for (const args of [['--bogus'], ['--format', 'bmp']]) {
+  test(`lithocinch ${args.join(' ')} is a usage error (exit 2), not a run`, () => {
+    const r = run(...args);
+    assert.equal(r.status, 2, r.stderr);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /^error: /m);
+    assert.doesNotMatch(r.stderr, /^\s+at \S|CommanderError/m); // no stack frame
+  });
+}
+
+test('lithocinch --version prints the version and exits 0', () => {
+  const r = run('--version');
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^\d+\.\d+\.\d+\n$/);
+});
+
+test('lithocinch serve names itself lithocinch in its banner', async () => {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, [CLI, 'serve', '--port', '0'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  try {
+    const banner = await new Promise((resolve, reject) => {
+      let err = '';
+      const timer = setTimeout(() => reject(new Error(`no banner: ${err}`)), 10000);
+      child.stderr.on('data', (c) => { err += c; if (err.includes('\n')) { clearTimeout(timer); resolve(err); } });
+    });
+    assert.match(banner, /^lithocinch serve \d+\.\d+\.\d+ listening on http:\/\/127\.0\.0\.1:\d+/);
+  } finally {
+    child.kill();
+  }
+});
