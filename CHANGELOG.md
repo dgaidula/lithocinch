@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- `--cheat` added: `lithocinch --cheat` (and `litho --cheat`) prints a short card of common invocations in tldr page format and exits 0. It cannot be combined with `--json` or `--quiet` (usage error, exit 2).
+
 ## 3.1.2 — 2026-10-19
 - Fix: a usage error on the directory command (an unknown option, a bad `--format` choice) exited 1, the same status as a failed run; it now exits 2, like `serve` and `transform`. Help and `--version` still exit 0.
 - Fix: the `serve` banner said `process-images serve`; it now says `lithocinch serve`.

@@ -92,6 +92,8 @@ lithocinch ./products --square --bg-color "#ffffff" --jpeg-quality 90
 lithocinch ./photos --dry-run --verbose
 ```
 
+`lithocinch --cheat` prints a short card of common invocations in tldr page format.
+
 ### Common options
 
 | Flag | Default | Description |

@@ -17,6 +17,35 @@ const pkg = JSON.parse(
   readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8')
 );
 
+const CHEAT = `# lithocinch
+
+> Optimize a folder of images in bulk: cap the dimensions, normalize color to sRGB and compress each file.
+> More information: lithocinch --help.
+
+- Simulate optimizing a folder of images:
+
+\`lithocinch {{path/to/images}} --dry-run --verbose\`
+
+- Optimize a folder into an output folder:
+
+\`lithocinch {{path/to/images}} --output {{path/to/output}}\`
+
+- Keep the original dimensions instead of capping at 2560 px:
+
+\`lithocinch {{path/to/images}} --output {{path/to/output}} --no-resize\`
+
+- Pick the smallest format for each image and record a manifest:
+
+\`lithocinch {{path/to/images}} --output {{path/to/output}} --format auto --manifest {{path/to/manifest.json}}\`
+
+- Also write WebP and AVIF copies for picture fallbacks:
+
+\`lithocinch {{path/to/images}} --emit webp,avif\`
+
+- Transform a single image from the command line:
+
+\`lithocinch transform --in {{path/to/photo.jpg}} --ops '{"width":800}' --format auto --out {{path/to/photo.avif}}\``;
+
 // Sub-commands for the transform-API backends (CMS plugin / Lambda backbone) are
 // dispatched before the directory-optimize command so they don't get parsed as
 // an input path. `serve` = HTTP daemon, `transform` = one-shot stdin/stdout JSON.
@@ -140,10 +169,18 @@ program
   .option('-q, --quiet', 'suppress the progress bar and per-file logging', false)
   .option('--verbose', 'log every file as it is processed', false)
   .option('--json', 'print the final summary as JSON', false)
+  .option('--cheat', 'print a short card of common invocations in tldr page format and exit')
   .showHelpAfterError()
   .exitOverride(); // usage errors exit 2, like the sub-commands (see the parseAsync catch below)
 
 program.action(async (input, opts) => {
+  if (opts.cheat) {
+    for (const mode of ['quiet', 'json']) {
+      if (opts[mode]) program.error(`--cheat and --${mode} cannot be combined`, { exitCode: 2 });
+    }
+    console.log(CHEAT);
+    return;
+  }
   const options = {
     input,
     output: opts.output,
