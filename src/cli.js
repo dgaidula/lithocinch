@@ -176,7 +176,7 @@ program
 program.action(async (input, opts) => {
   if (opts.cheat) {
     for (const mode of ['quiet', 'json']) {
-      if (opts[mode]) program.error(`--cheat and --${mode} cannot be combined`, { exitCode: 2 });
+      if (opts[mode]) program.error(`error: --cheat and --${mode} cannot be combined`, { exitCode: 2 });
     }
     console.log(CHEAT);
     return;

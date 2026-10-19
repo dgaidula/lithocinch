@@ -111,7 +111,7 @@ for (const mode of ['--json', '--quiet', '-q']) {
     const r = run('--cheat', mode);
     assert.equal(r.status, 2, r.stderr);
     assert.equal(r.stdout, '');
-    assert.match(r.stderr, /--cheat and --(json|quiet) cannot be combined/);
+    assert.match(r.stderr, /^error: --cheat and --(json|quiet) cannot be combined/);
   });
 }
 
