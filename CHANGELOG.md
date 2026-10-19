@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.0 — 2026-10-19
 - `--cheat` added: `lithocinch --cheat` (and `litho --cheat`) prints a short card of common invocations in tldr page format and exits 0. It cannot be combined with `--json` or `--quiet` (usage error, exit 2).
 
 ## 3.1.2 — 2026-10-19
