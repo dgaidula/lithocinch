@@ -271,6 +271,7 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | — (new) | — | `--emit` | `emit` | also write sibling formats (e.g. `webp,avif`) beside each raster for `<picture>` fallbacks |
 | — (new) | — | `--dry-run` | `dryRun` | plan only, write nothing |
 | — (new) | — | `--quiet` / `--verbose` / `--json` | — | output control |
+| — (new) | — | `--cheat` | — | print a short card of common invocations (tldr page format) and exit; not with `--json` or `--quiet` |
 
 ---
 
