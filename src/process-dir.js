@@ -55,6 +55,14 @@ async function caseInsensitive(dir) {
   }
 }
 
+/**
+ * The key two output paths under `outputRoot` are compared by: case-folded
+ * (NFC first) where the volume ignores case, exact where it does not.
+ */
+export async function outputPathKey(outputRoot) {
+  return (await caseInsensitive(outputRoot)) ? (abs) => abs.normalize('NFC').toLowerCase() : (abs) => abs;
+}
+
 async function copyThrough(srcAbs, destAbs, dryRun) {
   if (dryRun) return;
   await fs.mkdir(path.dirname(destAbs), { recursive: true });
@@ -209,7 +217,7 @@ export async function processDirectory(options = {}, hooks = {}) {
   // is claimed when it is written, and refused if it is taken by then. On a
   // case-insensitive volume (the macOS and Windows default) Logo_lco.jpg and
   // logo_lco.jpg are one file, so there the paths are compared case-folded.
-  const sameFile = (await caseInsensitive(outputRoot)) ? (abs) => abs.normalize('NFC').toLowerCase() : (abs) => abs;
+  const sameFile = await outputPathKey(outputRoot);
   const claimed = new Map(); // absolute output path (case-folded where the volume is) -> source rel
   const claim = (abs, rel) => {
     const by = claimed.get(sameFile(abs));

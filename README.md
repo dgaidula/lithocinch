@@ -353,7 +353,11 @@ It follows the directory command’s conventions: copies go to `-o` (default
 `../img-optimize-output/`, a folder tree is mirrored) with `-s` inserted before
 the extension (default `_lco`, though names keep their spaces here), an output
 that already exists is skipped unless `--overwrite`, and `--dry-run` reads and
-checks every file and writes nothing. To rewrite files where they are, name
+checks every file and writes nothing. Two files that would write the same
+output (`a/same.jpg` and `b/same.jpg` named as files, or `Same.jpg` and
+`same.jpg` where the volume ignores case, as above) are settled in the order
+given: the first keeps the path and the later one is `refuse output collides`,
+never written over it. To rewrite files where they are, name
 their own folder as the output:
 `lithocinch density ./exports --ppi 72 -o ./exports --suffix "" --overwrite`
 (see the known limits below for what a rewrite in place does to links).
@@ -429,12 +433,6 @@ The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `r
 - **Only SIGINT and SIGTERM are cleaned up after.** A run killed with SIGKILL,
   or by a power cut, can leave hidden `.<name>.<pid>.<hex>.tmp` files beside
   its outputs; they are safe to delete.
-- **`lithocinch density` does not yet catch outputs that differ only in
-  case.** On a case-insensitive volume (the macOS default),
-  `lithocinch density a/Same.jpg b/same.jpg` reports both `ok` and leaves one
-  `Same_lco.jpg` holding the second file’s pixels, replacing the first without
-  `--overwrite`. The main command does catch this. Give such files distinct
-  names, or run them one at a time, until it is fixed.
 - **A resolution name in element text is refused.** A `dc:description` that
   says “Set XResolution to 300” (or the name inside CDATA or a DOCTYPE) makes the
   packet refused, with the reason “has no namespace prefix”. It is a safe

@@ -1038,6 +1038,43 @@ test('density sub-command: two inputs that would write the same output are refus
   });
 });
 
+test('density sub-command: outputs that differ only in case or Unicode normalization collide where the volume treats them as one file', async () => {
+  await withDir(async (dir) => {
+    const flat = (c) => sharp({ create: { width: 16, height: 16, channels: 3, background: c } }).jpeg().toBuffer();
+    const nfc = 'Café.jpg';
+    const nfd = 'café.jpg';
+    for (const d of ['a', 'b']) await fs.mkdir(path.join(dir, d));
+    await fs.writeFile(path.join(dir, 'a/Same.jpg'), await flat('#c00'));
+    await fs.writeFile(path.join(dir, 'b/same.jpg'), await flat('#00c'));
+    await fs.writeFile(path.join(dir, 'a', nfc), await flat('#c00'));
+    await fs.writeFile(path.join(dir, 'b', nfd), await flat('#00c'));
+    // Ask the volume itself, independently of the code under test.
+    const caseBlind = await fs.access(path.join(dir, 'a/SAME.JPG')).then(() => true, () => false);
+    const formBlind = caseBlind && (await fs.access(path.join(dir, 'a', nfd)).then(() => true, () => false));
+    const out = path.join(dir, 'out');
+    const args = ['a/Same.jpg', 'b/same.jpg', `a/${nfc}`, `b/${nfd}`].map((f) => path.join(dir, f));
+    const r = run('density', ...args, '--ppi', '72', '-o', out, '--json');
+    const items = JSON.parse(r.stdout).items;
+    const red = async (f) => {
+      const [rr, , bb] = (await sharp(path.join(out, f)).stats()).channels.map((c) => c.mean);
+      return rr > bb;
+    };
+    if (caseBlind) {
+      assert.deepEqual(items.slice(0, 2).map((it) => it.verdict), ['ok', 'refuse']);
+      assert.equal(items[1].summary, 'output collides');
+      assert.ok(await red('Same_lco.jpg'), 'the first file (red) keeps the output');
+      assert.equal(r.status, 1);
+    } else {
+      assert.deepEqual(items.slice(0, 2).map((it) => it.verdict), ['ok', 'ok']);
+    }
+    if (formBlind) {
+      assert.deepEqual(items.slice(2).map((it) => it.verdict), ['ok', 'refuse']);
+      assert.ok(await red('Café_lco.jpg'), 'the first file (red) keeps the output');
+    }
+    if (caseBlind) assert.equal((await fs.readdir(out)).length, 2, 'one output per pair');
+  });
+});
+
 test('density sub-command: an output folder inside the input folder is not read as input; other images are listed as skipped', async () => {
   await withDir(async (dir) => {
     const input = path.join(dir, 'in');

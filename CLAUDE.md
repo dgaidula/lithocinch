@@ -23,7 +23,7 @@ guessing. Content-aware: picks lossy vs lossless and the best format per image.
 
 ## Commands
 ```bash
-node --test                         # 144 tests (node:test); 1 env-skip
+node --test                         # 145 tests (node:test); 1 env-skip
 node src/cli.js <dir> --verbose     # directory optimize
 node src/cli.js transform           # one-shot: JSON request on stdin -> JSON out
 node src/cli.js serve --port 4111   # HTTP daemon (warm sharp)

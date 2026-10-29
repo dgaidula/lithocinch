@@ -306,7 +306,6 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 
 - `--concurrency` autoscaling to CPU count.
 - `--density`: report the density outcome from the transform service; XMP in a passed-through PNG (`iTXt`) is neither rewritten nor reported.
-- `lithocinch density` compares its output paths by exact case, so on a case-insensitive volume (the macOS default) `a/Same.jpg` and `b/same.jpg` named as files both report `ok` and leave one output, `Same_lco.jpg`, holding the second file’s pixels under the first one’s name. The main command folds case there (it probes the volume) and refuses the later one.
 - Under `--format auto` an output-name collision goes to the first file written, which can differ between runs; claiming the `auto` names in sorted order after the pool finishes would make it fixed.
 - The sub-command’s read-back of the rewritten header (`internal check failed`) is a safety check that only fires on a bug in the patch code, so no test reaches it without fault injection (mutants K10 and X14 survive for that reason).
 - `--density` for WebP/AVIF (needs an EXIF block, ~210–255 bytes, and is ignored by many tools) and for TIFF output (sharp’s `withDensity` writes the TIFF resolution tags at no cost; not wired up).

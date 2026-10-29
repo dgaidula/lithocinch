@@ -19,6 +19,7 @@ import { parsePpi, RASTER_EXTS } from './config.js';
 import { patchJpegDensity, readJpegDensity, DensityError } from './density.js';
 import { buildOutputName } from './naming.js';
 import { runPool } from './pool.js';
+import { outputPathKey } from './process-dir.js';
 
 const HELP = `Usage: lithocinch density <file-or-folder...> --ppi <n> [options]
 
@@ -230,19 +231,21 @@ async function exists(p) {
 async function plan(args, o) {
   const entries = [];
   const items = { push: (item) => entries.push({ item }) };
-  const seen = new Map(); // dest -> src
+  // Same.jpg and same.jpg are one file where the volume ignores case: compare as the main command does.
+  const key = await outputPathKey(o.outputRoot);
+  const seen = new Map(); // dest (case-folded where the volume is) -> src
   const addJob = (src, rel) => {
     const name = rel;
     const outName = buildOutputName(rel, { suffix: o.suffix, spaceChar: null });
     const dest = path.join(o.outputRoot, outName);
-    if (seen.has(dest)) {
+    if (seen.has(key(dest))) {
       items.push({
         path: src, name, verdict: 'refuse', summary: 'output collides', changed: false,
-        reason: `would write the same output as ${seen.get(dest)}: ${dest}`, data: { output: dest, ppi: o.ppi },
+        reason: `would write the same output as ${seen.get(key(dest))}: ${dest}`, data: { output: dest, ppi: o.ppi },
       });
       return;
     }
-    seen.set(dest, src);
+    seen.set(key(dest), src);
     entries.push({ job: { src, name, dest } });
   };
   for (const arg of args) {
