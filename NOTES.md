@@ -267,6 +267,8 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | — (new) | — | `--format-pool` / `--format-tolerance` | `formatPool` / `formatTolerance` | `auto` candidate set (default `avif,webp,jpeg,png`) + compatibility tie-break tolerance (3%) |
 | — (new) | — | `--manifest` | `manifest` | JSON map of source → output(s); required for `auto` skip-detection (extensions change) |
 | — (new) | — | `--keep-metadata` | `keepMetadata` | re-embed sRGB ICC + EXIF |
+| — (new) | — | `--density <ppi>` | `density` | after encoding, rewrite the output's resolution header to this many pixels per inch (whole number 1–65535). JPEG: JFIF + any EXIF resolution (an 18-byte JFIF header is inserted if neither exists); PNG: `pHYs`. WebP/AVIF/GIF/TIFF are refused (`--format`, `--emit`) or reported per file; `--format auto` narrows its pool to jpeg/png. No ICC/EXIF is added. Skip-detection ignores it: re-run with `--overwrite` after changing it |
+| — (new) | — | `lithocinch density <files> --ppi <n>` | — | sub-command: header-only rewrite of existing JPEGs, no re-encode. Takes `-o/--output`, `-s/--suffix`, `--overwrite`, `--dry-run`, `--brief`, `--json`, `-q/--quiet`; exit 0/1/2/3 (see README) |
 | — (new) | — | `--flatten` | `flatten` | write output flat instead of mirroring subfolders |
 | — (new) | — | `--emit` | `emit` | also write sibling formats (e.g. `webp,avif`) beside each raster for `<picture>` fallbacks |
 | — (new) | — | `--dry-run` | `dryRun` | plan only, write nothing |
@@ -302,6 +304,7 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 ## 4. Still TODO / possible follow-ups
 
 - `--concurrency` autoscaling to CPU count.
+- `--density` for WebP/AVIF (needs an EXIF block, ~210–255 bytes, and is ignored by many tools) and for TIFF output (sharp's `withDensity` writes the TIFF resolution tags at no cost; not wired up).
 - Optional WebP/AVIF "also emit" mode (write `foo.jpg` **and** `foo.webp`).
 - A `--config <file>` loader so you can save preset profiles.
 - SAM/CDK template + `Dockerfile` for the Lambda packaging path.

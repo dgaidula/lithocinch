@@ -106,6 +106,7 @@ lithocinch ./photos --dry-run --verbose
 | `--manifest <path>` | — | JSON `source → output` map; enables `--format auto` skip-detection |
 | `--webp-mode <m>` | `auto` | `auto` (classify + shoot out), `lossy`, `lossless`, `near-lossless` |
 | `--emit <formats>` | — | Also write sibling formats (e.g. `webp,avif`) for `<picture>` |
+| `--density <ppi>` | — | Write this resolution into JPEG and PNG outputs ([details](#resolution-headers---density-and-lithocinch-density)) |
 | `--square` | off | Pad to a `max-size` square using `--bg-color` |
 | `--jpeg-target <ssim>` | `0.999` | Adaptive JPEG SSIM target (`0.999` = jpeg-recompress "low") |
 | `--jpeg-min` / `--jpeg-max` | `30` / `60` | Adaptive JPEG quality search band |
@@ -186,6 +187,118 @@ AVIFs. Pair with `<picture>`:
   <img src="photo_lco.jpg" alt="">
 </picture>
 ```
+
+## Resolution headers (`--density` and `lithocinch density`)
+
+Some submission forms ask for an exact resolution (72 ppi for one awards
+program, 300 for print). The number lives in a few header bytes that do not
+affect the pixels, and lithocinch can set it two ways. They differ in what they
+promise.
+
+| | `--density <ppi>` | `lithocinch density <files> --ppi <n>` |
+|---|---|---|
+| Does | the normal optimize run, then writes the resolution into each output | rewrites the resolution of JPEGs you already have |
+| Re-encodes | yes, as always (smaller files, resized, sRGB) | **no**: the image data is copied byte for byte |
+| Guarantees | the output is the optimizer’s output, plus a header that says *n* ppi | the decoded pixels are identical to the input’s |
+| Formats | JPEG and PNG | JPEG only |
+| Cost | 0 bytes (PNG) or 18 bytes (JPEG) over the same run without it | 0 bytes when the file already has a density header, 18 when it needs one |
+
+```bash
+# optimize a folder and stamp 72 ppi on every JPEG and PNG that comes out
+lithocinch ./submission -o ./ready --density 72
+
+# keep your own pixels exactly: only the resolution header changes
+lithocinch density print-export.jpg --ppi 72 -o ./ready
+lithocinch density ./exports --ppi 72 --dry-run --brief
+```
+
+### What gets written
+
+**JPEG** can hold a density in two places, and both are rewritten wherever they
+exist:
+
+- the **JFIF** header: units set to pixels per inch, plus the horizontal and
+  vertical density;
+- **EXIF**: `XResolution` and `YResolution` (stored as fractions, rewritten as
+  *n*/1) and `ResolutionUnit` (set to inches, so a file saved in centimetres is
+  not left claiming 72 per centimetre).
+
+A JPEG with neither (what sharp writes, so every file lithocinch itself has
+optimized) gets an 18-byte JFIF header inserted. That is done only when it
+cannot change how a decoder reads the colours: a file with an Adobe marker,
+with four components, or with components labelled R, G, B is refused instead.
+
+Three more places can carry a resolution and are **not** rewritten: Photoshop’s
+own resolution resource, XMP `XResolution` fields, and the thumbnail’s EXIF.
+When a file has the first two, `lithocinch density` ends that file’s line with
+a warning (verdict `warn`, exit 1), because a program that reads those fields
+would still see the old number.
+
+**PNG** stores a density in its `pHYs` chunk, in pixels per *metre*, so a whole
+number of inches is not exactly representable: 72 ppi is stored as 2835 and
+reads back as 72.01, 300 ppi as 11811 (299.9994). Programs round it, and
+ImageMagick reports the pixel-per-centimetre figure. An existing `pHYs` is
+replaced in place; a missing one is inserted (21 bytes).
+
+**WebP, AVIF, GIF and TIFF output are not supported.** WebP and AVIF can only
+hold a resolution inside an EXIF block, which sharp writes at 190 to 255 bytes
+and many tools ignore; GIF has no field for it; TIFF output is not wired up
+yet. Asking for them is refused up front (`--density 72 --format webp` is a
+usage error, exit 2, as is `--emit webp`). With `--format auto` the candidate
+pool is narrowed to JPEG and PNG. When the format is only known per file (the
+default keeps each file’s own format, so a folder can hold a WebP), the file is
+still written, a warning names it, and the summary counts it under
+`density: not written`. An untouched original that cannot hold a density can
+still win an `auto` shootout; it is reported the same way.
+
+### Metadata, and what the number costs
+
+lithocinch strips metadata for size, and `--density` keeps that. The header
+bytes are rewritten *after* encoding, so nothing else is added: no ICC profile,
+no EXIF block. sharp’s own `withDensity` could do it during encoding, but
+it adds an EXIF block (about 190 bytes on a small JPEG, 192 on a PNG), and
+`withMetadata({ density })` also embeds an ICC profile (about 690 bytes). Rewriting
+the header costs 18 bytes on a JPEG (the JFIF header) and none on a PNG.
+With `--keep-metadata`, EXIF that is kept has its resolution rewritten too.
+
+Skip-detection looks only at whether the output file exists, so after changing
+`--density` on a re-run, add `--overwrite` or the existing outputs are kept as
+they are.
+
+### `lithocinch density`
+
+```
+lithocinch density <file-or-folder...> --ppi <n> [-o dir] [-s suffix] [--overwrite] [--dry-run]
+                   [--brief | --json | --quiet]
+```
+
+It follows the directory command’s conventions: copies go to `-o` (default
+`../img-optimize-output/`, a folder tree is mirrored) with `-s` inserted before
+the extension (default `_lco`, though names keep their spaces here), an output
+that already exists is skipped unless `--overwrite`, and `--dry-run` reads and
+checks every file and writes nothing. To rewrite files where they are, name
+their own folder: `-o . --suffix "" --overwrite`.
+
+Each file is checked before anything is written. A file that is not a JPEG, has
+a damaged header, is cut off partway through the image (it is decoded once to
+find out), or cannot hold a density is **refused** and no output is made for
+it. Output is written to a temporary name beside the destination and then
+renamed, so a failed write never leaves a half-written file.
+
+Output has four shapes, all rendered from the same list of results (one per
+file): the default (a few lines per file, showing the header before and after),
+`--brief` (one line per file, `<verdict> <summary>  <name>`, then a summary
+line), `--json`, and `--quiet` (the summary line). Verdicts are `ok`, `warn`,
+`skip`, `refuse` and `fail`. Exit status: `0` all done or skipped, `1` any file
+refused, failed or warned about, `2` usage error, `3` the run could not complete.
+
+```
+$ lithocinch density print-export.jpg --ppi 72 -o ready --brief
+ok set 72 ppi (JFIF, EXIF)  print-export.jpg
+summary: ok=1 warn=0 skip=0 refuse=0 fail=0
+```
+
+The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `readPngDensity` and `DensityError` (Buffer in, Buffer out) for the same job without the CLI; `optimizeImageBuffer` takes a `density` option and returns what happened in `result.density`.
 
 ## Transform service (CMS plugin / Lambda backbone)
 
