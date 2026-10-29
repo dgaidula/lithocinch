@@ -107,6 +107,7 @@ lithocinch ./photos --dry-run --verbose
 | `--webp-mode <m>` | `auto` | `auto` (classify + shoot out), `lossy`, `lossless`, `near-lossless` |
 | `--emit <formats>` | — | Also write sibling formats (e.g. `webp,avif`) for `<picture>` |
 | `--density <ppi>` | — | Write this resolution into JPEG and PNG outputs ([details](#resolution-headers---density-and-lithocinch-density)) |
+| `--allow-stale-xmp` | off | With `--density`: write a JPEG whose XMP resolution can’t be rewritten in place, with a warning, instead of refusing it |
 | `--square` | off | Pad to a `max-size` square using `--bg-color` |
 | `--jpeg-target <ssim>` | `0.999` | Adaptive JPEG SSIM target (`0.999` = jpeg-recompress "low") |
 | `--jpeg-min` / `--jpeg-max` | `30` / `60` | Adaptive JPEG quality search band |
@@ -121,7 +122,18 @@ lithocinch ./photos --dry-run --verbose
 | `--no-copy-non-images` | — | Don't copy non-image files through |
 | `-c, --concurrency <n>` | `16` | Images processed in parallel |
 | `--dry-run` | off | Plan only; write nothing |
-| `--json` | off | Print summary as JSON |
+| `--json` | off | Print summary as JSON (the exit status is the same as without it) |
+
+Two sources that would write the same output path — `a.gif`, `a.png` and
+`a.webp` under `--format jpeg` all become `a_lco.jpg`, and `--emit webp` gives
+`a.png` a sibling with the name `a.webp` writes — are settled before any file
+is processed, so the result never depends on which job finishes first: primary
+outputs are claimed before `--emit` siblings, each in sorted source order, the
+first keeps the path, and each later one is **refused** (not written, named in
+the log with the file that keeps it, counted on a `refused` summary line and
+in `refused` / `refusedFiles` in `--json`). A run with a refusal or an error
+exits 1. Under `--format auto` a name is known only after encoding, so it is
+claimed when the file is written and refused if another source already has it.
 
 Run `lithocinch --help` for the complete list (color, trim, metadata, AVIF,
 SVG, error-dir, etc.). Every option also exists as a library option key — see
@@ -214,7 +226,7 @@ lithocinch density ./exports --ppi 72 --dry-run --brief
 
 ### What gets written
 
-**JPEG** can hold a density in three places, and each is rewritten wherever it
+**JPEG** can hold a density in four places, and each is rewritten wherever it
 exists:
 
 - the **JFIF** header: units set to pixels per inch, plus the horizontal and
@@ -224,7 +236,10 @@ exists:
   not left claiming 72 per centimetre);
 - **Photoshop’s resolution resource** (APP13, resource `0x03ED`): a fixed
   16-byte record, rewritten in place to *n* pixels per inch (the display units
-  Photoshop shows in its dialog are left as they were).
+  Photoshop shows in its dialog are left as they were);
+- **XMP**: `tiff:XResolution`, `tiff:YResolution` and `tiff:ResolutionUnit`
+  (and the same names under `exif:` or any other prefix), rewritten in place
+  (see below).
 
 A JPEG with neither JFIF nor EXIF (what sharp writes, so every file lithocinch
 itself has optimized) gets an 18-byte JFIF header inserted. That is done only
@@ -232,16 +247,34 @@ when it cannot change how a decoder reads the colours: a file with an Adobe
 marker, with four components, or with components labelled R, G, B is refused
 instead.
 
-Two more places can carry a resolution and are **not** rewritten: XMP
-`XResolution` fields and the thumbnail’s EXIF (IFD1, which readers ignore).
-XMP is a text packet whose length would change, so a file with an XMP
-resolution is written but reported: `lithocinch density` gives it the verdict
-`warn` (exit 1), and the main command warns and counts it as stale (see
-below). The warning names the value XMP still holds and who reads it, for
-example `XMP resolution fields (still 300 ppi; Apple ImageIO (Preview, Finder)
-reads XMP before JFIF)`. Apple ImageIO reads EXIF before XMP, so where an EXIF
-resolution exists (and was rewritten) Preview shows the new number; where only
-JFIF exists, it shows the XMP one.
+XMP matters because Apple ImageIO (Preview, Finder) reads it before JFIF: a
+JPEG whose XMP says 300 still shows 300 there after its JFIF header says 72.
+XMP is a text packet, and `300/1` → `72/1` changes its length, so it is
+rewritten **in place**: each value keeps its form (a fraction is written as
+*n*/1, a whole number as *n*), the unit becomes 2 (inch), and the difference
+in length is taken from, or given to, the whitespace padding that writers such
+as Photoshop leave before `<?xpacket end="w"?>`. The APP1 segment keeps its
+exact length and no byte outside the packet changes. Only the two plain forms
+are edited, an attribute (`tiff:XResolution="300/1"`) and an element holding
+nothing but its value (`<tiff:XResolution>300/1</tiff:XResolution>`); a
+longer name such as `exif:FocalPlaneXResolution` is not a resolution and is
+left alone.
+
+When the XMP **cannot** be rewritten that way — no padding to absorb a longer
+value (or no `<?xpacket end?>` at all when the length changes), Extended XMP
+(a packet split over several APP1 segments), or a value in any other form
+(attributes on the element, markup or entities inside it, a decimal) — the
+file is **refused** and nothing is written for it: `lithocinch density` gives
+it the verdict `refuse` (`XMP not rewritable`), and the main command leaves
+that output unwritten, logs the reason, counts it under `refused` and exits 1.
+`--allow-stale-xmp` (on either command; `allowStaleXmp` in the library)
+writes such a file anyway with its old XMP, as before: a `warn` in
+`lithocinch density`, a stale count on the main command, and a warning that
+names the value XMP still holds and who reads it, for example
+`XMP resolution fields (still 300 ppi; Apple ImageIO (Preview, Finder) reads
+XMP before JFIF)`.
+
+The thumbnail’s EXIF (IFD1) is **not** rewritten; readers ignore it.
 
 **PNG** stores a density in its `pHYs` chunk, in pixels per *metre*, so a whole
 number of inches is not exactly representable: 72 ppi is stored as 2835 and
@@ -266,10 +299,13 @@ still written, a warning names it, and the summary counts it under
 still win an `auto` shootout; it is reported the same way.
 
 An untouched original that wins (the optimizer could not make it smaller) also
-keeps whatever XMP it had. Such a file gets its JFIF or EXIF density, but it is
-not counted as written: a warning names the file and the stale field, the
-summary line counts it as `written but an older value kept in another field`,
-and `--json` lists it under `density.staleFiles`.
+keeps whatever XMP it had, and that XMP is rewritten or refused as above (an
+encoded output carries no XMP: sharp does not keep it). With
+`--allow-stale-xmp`, or for a Photoshop resolution resource that is not the
+expected 16 bytes, such a file gets its JFIF or EXIF density but is not counted
+as written: a warning names the file and the stale field, the summary line
+counts it as `written but an older value kept in another field`, and
+`--json` lists it under `density.staleFiles`.
 
 ### Metadata, and what the number costs
 
@@ -290,7 +326,7 @@ they are. The summary line says how many were skipped this way:
 
 ```
 lithocinch density <file-or-folder...> --ppi <n> [-o dir] [-s suffix] [--overwrite] [--dry-run]
-                   [--brief | --json | --quiet]
+                   [--allow-stale-xmp] [--brief | --json | --quiet]
 ```
 
 It follows the directory command’s conventions: copies go to `-o` (default
@@ -306,7 +342,8 @@ A folder is scanned for `.jpg` and `.jpeg`; any other image in it (PNG, WebP,
 GIF, AVIF, TIFF) is listed as `skip not a JPEG`, so an output folder that is
 missing them is no surprise. Each file is checked before anything is written. A
 file that is not a JPEG, has a damaged header, is cut off partway through the
-image (it is decoded once to find out), or cannot hold a density is
+image (it is decoded once to find out), cannot hold a density, or has an XMP
+resolution that cannot be rewritten in place (without `--allow-stale-xmp`) is
 **refused** and no output is made for it. Output is written to a temporary name
 beside the destination and then renamed, so a failed write never leaves a
 half-written file, and an interrupted run (Ctrl-C, SIGTERM) removes the
@@ -326,15 +363,15 @@ ok set 72 ppi (JFIF, EXIF)  print-export.jpg
 summary: ok=1 warn=0 skip=0 refuse=0 fail=0
 ```
 
-The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `readPngDensity` and `DensityError` (Buffer in, Buffer out) for the same job without the CLI; `optimizeImageBuffer` takes a `density` option and returns what happened in `result.density`.
+The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `readPngDensity` and `DensityError` (Buffer in, Buffer out) for the same job without the CLI; `patchJpegDensity(buf, ppi, { allowStaleXmp })` throws a `DensityError` with code `stale-xmp` for an XMP it cannot rewrite, and `readJpegDensity` adds an `xmp` entry when a packet names a resolution. `optimizeImageBuffer` takes `density` and `allowStaleXmp` options, returns what happened in `result.density`, and throws the same `stale-xmp` error.
 
 ### Known limits
 
-- **XMP is not rewritten.** A file whose XMP states a resolution is written
-  with the new JFIF or EXIF value and reported (a `warn` in
-  `lithocinch density`, a stale count on the main command). Apple ImageIO (Preview, Finder)
-  reads XMP before JFIF, so a JPEG with JFIF and XMP but no EXIF still shows
-  the XMP number there. Whether to rewrite XMP or refuse such files is open.
+- **XMP is rewritten only in place.** A packet without enough padding for the
+  new values, Extended XMP, or a value in a form other than a plain attribute
+  or element is refused (see above); `--allow-stale-xmp` writes it with the
+  old XMP. XMP in a PNG (an `iTXt` chunk on a passed-through original) is
+  neither rewritten nor reported.
 - **The thumbnail’s EXIF (IFD1) is not rewritten or reported.** ImageMagick
   and Apple ImageIO both read IFD0.
 - **PNG density is per metre**, so 72 ppi reads back as 72.01 and 300 as
@@ -422,6 +459,10 @@ curl -s localhost:4111/transform -H "authorization: Bearer $PI_TOKEN" \
 
 The Lambda (`lithocinch/lambda/transform`) takes the identical JSON body via a
 Function URL / API Gateway v2 event and honors `PI_TOKEN`.
+
+`lithocinch transform` reports a failure as one `error: …` line on stderr: exit
+2 for a bad option or request (an unknown `--format`, a bad `density`, JSON
+that does not parse), exit 1 for a failure while transforming.
 
 ## Library usage
 
