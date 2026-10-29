@@ -334,6 +334,7 @@ program.action(async (input, opts) => {
 
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   if (stats.errors || stats.refused) process.exitCode = 1; // in every output mode, --json included
+  if (stats.density?.stale) process.exitCode = 1; // written, but stale (--allow-stale-xmp): a warn, as in `lithocinch density`
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ...stats, ms: Math.round(ms) }, null, 2) + '\n');

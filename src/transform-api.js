@@ -14,6 +14,7 @@
 // Response: [ { format, width, height, bytes, ssim, engine, data: Buffer }, ... ]
 
 import { optimizeImageBuffer } from './optimize.js';
+import { ConfigError } from './config.js';
 
 /** Map a transform `ops` object onto optimizeImageBuffer option keys. */
 function opsToOptions(ops = {}) {
@@ -33,7 +34,7 @@ function opsToOptions(ops = {}) {
  */
 export async function runTransform(image, request = {}) {
   if (!Buffer.isBuffer(image) || image.length === 0) {
-    throw new Error('runTransform: `image` must be a non-empty Buffer');
+    throw new ConfigError('runTransform: `image` must be a non-empty Buffer'); // a malformed request (exit 2 from the CLI)
   }
   const base = request.defaults || {};
   const items = Array.isArray(request.batch) && request.batch.length

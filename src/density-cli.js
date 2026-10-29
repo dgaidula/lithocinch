@@ -81,7 +81,7 @@ function describe(d) {
     parts.push(`EXIF ${r(d.exif.x)} x ${r(d.exif.y)} ${unit}`);
   }
   if (d.xmp) {
-    const unit = { 2: 'in', 3: 'cm' }[d.xmp.unit] ?? (d.xmp.unit == null ? 'in (default)' : `unit ${d.xmp.unit}`);
+    const unit = { 2: 'in', 3: 'cm', inch: 'in', centimeter: 'cm' }[d.xmp.unit?.toLowerCase()] ?? (d.xmp.unit == null ? 'in (default)' : `unit ${d.xmp.unit}`);
     parts.push(`XMP ${d.xmp.x ?? 'none'} x ${d.xmp.y ?? 'none'} ${unit}`);
   }
   return parts.join(', ') || 'no density header';
@@ -184,7 +184,7 @@ async function processFile(job, o) {
   const ppiText = [String(o.ppi), `${o.ppi}/1`];
   const xmpOk =
     !patch.patched.includes('XMP') ||
-    (after.xmp && [after.xmp.x, after.xmp.y].every((v) => v == null || ppiText.includes(v)) && (after.xmp.unit == null || after.xmp.unit === '2'));
+    (after.xmp && [after.xmp.x, after.xmp.y].every((v) => v == null || ppiText.includes(v)) && (after.xmp.unit == null || after.xmp.unit === '2' || after.xmp.unit === 'Inch'));
   const keptOk =
     (!before.jfif || after.jfif) &&
     (!before.exif || (after.exif && ['x', 'y', 'unit'].every((k) => before.exif[k] == null || after.exif[k] != null)));

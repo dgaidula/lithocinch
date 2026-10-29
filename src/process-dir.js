@@ -36,6 +36,25 @@ async function exists(p) {
   }
 }
 
+/**
+ * Does the volume that holds (or will hold) `dir` ignore the case of names?
+ * Probed without writing anything: the nearest folder that exists is looked up
+ * again with the case of its name swapped. With nothing to probe by, it is
+ * assumed to, which only ever refuses more.
+ */
+async function caseInsensitive(dir) {
+  for (let p = dir; ; p = path.dirname(p)) {
+    const name = path.basename(p);
+    const swapped = name.replace(/[a-z]/gi, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
+    const here = swapped !== name && (await fs.stat(p).catch(() => null));
+    if (here) {
+      const other = await fs.stat(path.join(path.dirname(p), swapped)).catch(() => null);
+      return other != null && other.dev === here.dev && other.ino === here.ino;
+    }
+    if (path.dirname(p) === p) return true;
+  }
+}
+
 async function copyThrough(srcAbs, destAbs, dryRun) {
   if (dryRun) return;
   await fs.mkdir(path.dirname(destAbs), { recursive: true });
@@ -187,12 +206,15 @@ export async function processDirectory(options = {}, hooks = {}) {
   // jobs never race for one file. Primaries are claimed first, then --emit
   // siblings, each in sorted source order: the first keeps the path and the
   // later ones are refused. A name known only after encoding (--format auto)
-  // is claimed when it is written, and refused if it is taken by then.
-  const claimed = new Map(); // absolute output path -> source rel
+  // is claimed when it is written, and refused if it is taken by then. On a
+  // case-insensitive volume (the macOS and Windows default) Logo_lco.jpg and
+  // logo_lco.jpg are one file, so there the paths are compared case-folded.
+  const sameFile = (await caseInsensitive(outputRoot)) ? (abs) => abs.normalize('NFC').toLowerCase() : (abs) => abs;
+  const claimed = new Map(); // absolute output path (case-folded where the volume is) -> source rel
   const claim = (abs, rel) => {
-    const by = claimed.get(abs);
+    const by = claimed.get(sameFile(abs));
     if (by !== undefined && by !== rel) return `${by} writes the same output: ${path.relative(outputRoot, abs)}`;
-    claimed.set(abs, rel);
+    claimed.set(sameFile(abs), rel);
     return null;
   };
   const sorted = [...plan].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));

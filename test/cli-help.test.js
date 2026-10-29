@@ -167,6 +167,7 @@ test('lithocinch transform with a bad option, bad JSON or a bad density is a one
       '--ops not JSON': run('transform', '--in', file, '--ops', '{width:'),
       'defaults.density abc': stdin({ image: jpeg.toString('base64'), defaults: { density: 'abc' } }),
       'density with webp': stdin({ image: jpeg.toString('base64'), format: 'webp', defaults: { density: 72 } }),
+      'no image': stdin({ format: 'jpeg' }),
     };
     for (const [label, r] of Object.entries(cases)) {
       assert.equal(r.status, 2, `${label}: ${r.stderr}`);
@@ -211,5 +212,27 @@ test('sources that would write the same output are refused before any job starts
     const none = run(input, '-o', path.join(dir, 'n'), '--error-dir', path.join(dir, 'err'));
     assert.equal(none.status, 0, none.stderr);
     assert.doesNotMatch(none.stderr, /refused/);
+  });
+});
+
+test('outputs that differ only in case collide where the volume ignores case (the macOS default), and not where it does not', async () => {
+  await withDir(async (dir) => {
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    await tiny('#c00').png().toFile(path.join(input, 'Logo.png'));
+    await tiny('#00c').gif().toFile(path.join(input, 'logo.gif'));
+    // Ask the volume itself, independently of the code under test.
+    const insensitive = await fs.access(path.join(input, 'LOGO.PNG')).then(() => true, () => false);
+    const out = path.join(dir, 'out');
+    const r = run(input, '-o', out, '--error-dir', path.join(dir, 'err'), '--format', 'jpeg', '-q', '--json');
+    const stats = JSON.parse(r.stdout);
+    if (insensitive) {
+      assert.equal(r.status, 1, r.stderr);
+      assert.deepEqual(stats.refusedFiles.map((f) => [f.file, f.reason]), [['logo.gif', 'Logo.png writes the same output: logo_lco.jpg']]);
+      assert.deepEqual(await fs.readdir(out), ['Logo_lco.jpg']);
+    } else {
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual((await fs.readdir(out)).sort(), ['Logo_lco.jpg', 'logo_lco.jpg']);
+    }
   });
 });

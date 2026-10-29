@@ -181,23 +181,126 @@ function hasPhotoshopResolution(buf, from, end) {
 // exif:YResolution, ...), never a longer name such as exif:FocalPlaneXResolution.
 const XMP_FIELD = /(?<![\w.:-])[A-Za-z_][\w.-]*:(XResolution|YResolution|ResolutionUnit)(?![\w.:-])/g;
 const XMP_WS = ' \t\r\n';
+// The same names with no prefix (a default namespace, xmlns="..."): Apple
+// ImageIO reads them, so a packet that holds one is never passed over.
+const XMP_BARE = /(?:^|[<\s])(XResolution|YResolution|ResolutionUnit)(?=[\s=>/])/g;
+// Elements that hold the image's own properties: x:xmpmeta, rdf:RDF, then one
+// rdf:Description. Anything deeper (xmpMM:Pantry, xmpMM:DerivedFrom, ...)
+// describes another document.
+const XMP_OUTER = /^(?:[\w.-]+:)?(?:xmpmeta|xapmeta|RDF)$/;
+const XMP_DESCRIPTION = /^(?:[\w.-]+:)?Description$/;
+
+/** A UTF-16 (or UTF-32) packet: a byte-order mark, or NULs between the characters. */
+const xmpUtf16 = (xml) => /^(?:\xff\xfe|\xfe\xff)/.test(xml) || xml.slice(0, 64).split('\0').length > 16;
+
+/**
+ * Follow the markup of an XMP packet far enough to place every name in it:
+ * the spans that are text rather than markup (comments, attribute values),
+ * and, for each element and attribute name (keyed by its offset), the
+ * elements it sits inside and, for an attribute, the element it is on.
+ * `broken` when the markup cannot be followed to the end: an unclosed tag,
+ * quote, comment or element, or a closing tag that does not match.
+ * @returns {{ text: [number, number][], names: Map<number, {inside: string[], on: string|null}>, broken: boolean }}
+ */
+function xmpMarkup(xml) {
+  const text = [];
+  const names = new Map();
+  const open = [];
+  const broken = { text, names, broken: true };
+  let i = 0;
+  for (;;) {
+    const lt = xml.indexOf('<', i);
+    if (lt === -1) return { text, names, broken: open.length > 0 };
+    const past = (close, from) => {
+      const e = xml.indexOf(close, from);
+      return e === -1 ? -1 : e + close.length;
+    };
+    if (xml.startsWith('<!--', lt)) {
+      if ((i = past('-->', lt + 4)) === -1) return broken;
+      text.push([lt, i]);
+    } else if (xml.startsWith('<![CDATA[', lt)) {
+      if ((i = past(']]>', lt + 9)) === -1) return broken;
+    } else if (xml.startsWith('<!', lt)) {
+      return broken; // a DOCTYPE or another declaration: not XMP
+    } else if (xml.startsWith('<?', lt)) {
+      if ((i = past('?>', lt + 2)) === -1) return broken;
+    } else if (xml.startsWith('</', lt)) {
+      const close = /^<\/([^\s>]+)[ \t\r\n]*>/.exec(xml.slice(lt, lt + 256));
+      if (!close || open.pop() !== close[1]) return broken;
+      i = lt + close[0].length;
+    } else {
+      const tag = /^<([^\s/>]+)/.exec(xml.slice(lt, lt + 256));
+      if (!tag) return broken;
+      names.set(lt + 1, { inside: [...open], on: null });
+      let j = lt + tag[0].length;
+      for (;;) {
+        while (j < xml.length && XMP_WS.includes(xml[j])) j++;
+        if (xml[j] === '>') {
+          open.push(tag[1]);
+          j++;
+          break;
+        }
+        if (xml.startsWith('/>', j)) {
+          j += 2;
+          break;
+        }
+        const attr = /^([^\s=/>]+)[ \t\r\n]*=[ \t\r\n]*(["'])/.exec(xml.slice(j, j + 256));
+        if (!attr) return broken;
+        names.set(j, { inside: [...open], on: tag[1] });
+        const from = j + attr[0].length;
+        const to = xml.indexOf(attr[2], from);
+        if (to === -1) return broken;
+        text.push([from, to]);
+        j = to + 1;
+      }
+      i = j;
+    }
+  }
+}
+
+/** Is a name inside another resource (a second rdf:Description, or any property element)? */
+const xmpNested = ({ inside }) =>
+  inside.filter((q) => XMP_DESCRIPTION.test(q)).length > 1 || inside.some((q) => !XMP_OUTER.test(q) && !XMP_DESCRIPTION.test(q));
 
 /**
  * Find the resolution properties in an XMP packet, each with the offset and
  * text of its value. Only two plain forms are read: an attribute
  * (tiff:XResolution="300/1") and an element holding nothing but its value
  * (<tiff:XResolution>300/1</tiff:XResolution>), the value a whole number or a
- * fraction of whole numbers. Any other use of the names is a `problem`, and
- * the packet is then left alone.
- * @returns {{ fields: {name:string, qname:string, at:number, value:string, form:'rational'|'integer'}[], problem: string|null }}
+ * fraction of whole numbers (ResolutionUnit: a whole number, or the word Inch
+ * or Centimeter). Only the image's own properties count: a name inside a
+ * comment or another attribute's value is text, and one inside a nested
+ * resource (xmpMM:Pantry and the like) belongs to another document; both are
+ * passed over. Any other use of the names (including one with no prefix, a
+ * UTF-16 packet, or markup that cannot be followed) is a `problem`, and the
+ * packet is then left alone.
+ * @returns {{ fields: {name:string, qname:string, at:number, value:string, form:'rational'|'integer'|'word'}[], problem: string|null }}
  */
 function xmpFields(xml) {
   const fields = [];
+  if (xmpUtf16(xml)) {
+    // JPEG XMP must be UTF-8, but Apple ImageIO reads a UTF-16LE packet. Its
+    // values are read (for the warning) from the text without its NULs.
+    const narrow = xml.replace(/^(?:\xff\xfe|\xfe\xff)/, '').replaceAll('\0', '');
+    return { fields: xmpFields(narrow).fields, problem: xmpHasField(narrow) ? 'the packet is UTF-16, not UTF-8' : null };
+  }
+  const markup = xmpMarkup(xml);
+  if (markup.broken) {
+    return { fields, problem: xmpHasField(xml) ? 'its markup cannot be followed to the end (an unclosed tag, quote, comment or element)' : null };
+  }
+  const isText = (at) => markup.text.some(([from, to]) => at >= from && at < to);
   for (const m of xml.matchAll(XMP_FIELD)) {
     const qname = m[0];
     const at = m.index;
     const after = at + qname.length;
     if (xml.startsWith('</', at - 2)) continue; // the closing tag of an element read below
+    if (isText(at)) continue; // inside a comment or another attribute's value: not a property
+    const site = markup.names.get(at);
+    if (!site) return { fields, problem: `${qname} appears outside an attribute or element` };
+    if (xmpNested(site)) continue; // another document's resolution (xmpMM:Pantry, ...)
+    if (site.on ? !XMP_DESCRIPTION.test(site.on) : site.inside.length && !XMP_DESCRIPTION.test(site.inside.at(-1))) {
+      return { fields, problem: `${qname} is not a property of an rdf:Description` };
+    }
     let valueAt;
     let value;
     if (xml[at - 1] === '<') {
@@ -212,16 +315,26 @@ function xmpFields(xml) {
       return { fields, problem: `${qname} appears outside an attribute or element` };
     }
     const form = /^[0-9]+\/[0-9]+$/.test(value) ? 'rational' : /^[0-9]+$/.test(value) ? 'integer' : null;
-    if (!form || (m[1] === 'ResolutionUnit' && form !== 'integer')) {
-      return { fields, problem: `${qname} holds "${value}", not a whole number${m[1] === 'ResolutionUnit' ? '' : ' or a fraction'}` };
+    const word = m[1] === 'ResolutionUnit' && /^(?:inch|centimeter)$/i.test(value); // exif:ResolutionUnit="Inch", as some writers store it
+    if (!word && (!form || (m[1] === 'ResolutionUnit' && form !== 'integer'))) {
+      return { fields, problem: `${qname} holds "${value}", not a whole number${m[1] === 'ResolutionUnit' ? ', Inch or Centimeter' : ' or a fraction'}` };
     }
-    fields.push({ name: m[1], qname, at: valueAt, value, form });
+    fields.push({ name: m[1], qname, at: valueAt, value, form: word ? 'word' : form });
+  }
+  for (const m of xml.matchAll(XMP_BARE)) {
+    if (!isText(m.index + m[0].length - m[1].length)) return { fields, problem: `${m[1]} has no namespace prefix (a default namespace)` };
   }
   return { fields, problem: null };
 }
 
-/** Does this XMP text name a resolution property at all? */
-const xmpHasField = (xml) => new RegExp(XMP_FIELD.source).test(xml);
+/** Does this XMP text name a resolution property at all (anywhere, in any form)? */
+const xmpHasField = (xml) => new RegExp(XMP_FIELD.source).test(xml) || new RegExp(XMP_BARE.source).test(xml);
+
+/** Does this XMP packet hold a resolution property of the image, or one that cannot be read? */
+const xmpHasProperty = (xml) => {
+  const { fields, problem } = xmpFields(xml);
+  return fields.length > 0 || problem != null;
+};
 
 /** The XResolution an XMP packet states, as text for a warning ("300 ppi"), or null. */
 function xmpResolutionValue(xml) {
@@ -232,13 +345,14 @@ function xmpResolutionValue(xml) {
   const value = Math.round((Number(num) / Number(den)) * 100) / 100;
   if (!Number.isFinite(value)) return null;
   const unit = fields.find((f) => f.name === 'ResolutionUnit')?.value;
-  return `${value} ${unit === '3' ? 'per cm' : 'ppi'}`;
+  return `${value} ${unit === '3' || /^centimeter$/i.test(unit ?? '') ? 'per cm' : 'ppi'}`;
 }
 
 /**
  * Rewrite the resolution properties of the XMP packet at [start, end) of `out`
  * to `n` per inch, in place. Each value keeps its form (300/1 becomes n/1, 300
- * becomes n) and ResolutionUnit becomes 2 (inch), as in EXIF. The difference
+ * becomes n) and ResolutionUnit becomes 2 (inch), as in EXIF, or Inch where it
+ * was a word. A packet marked read-only (end="r") is left alone. The difference
  * in length is taken from, or given to, the packet's trailing padding (the
  * whitespace before <?xpacket end=...?>), so the segment keeps its exact
  * length and no byte outside the packet changes.
@@ -250,11 +364,12 @@ function rewriteXmp(out, start, end, n) {
   const { fields, problem } = xmpFields(xml);
   if (problem) return problem;
   if (!fields.length) return null;
+  if (/<\?xpacket[ \t\r\n]+end=(["'])r\1/.test(xml)) return 'the packet is marked read-only (<?xpacket end="r"?>)';
   let edited = '';
   let from = 0;
   for (const f of fields) {
     const next = f.name === 'ResolutionUnit' ? '2' : f.form === 'rational' ? `${n}/1` : String(n);
-    edited += xml.slice(from, f.at) + next;
+    edited += xml.slice(from, f.at) + (f.form === 'word' ? 'Inch' : next);
     from = f.at + f.value.length;
   }
   const grow = edited.length - from; // bytes the new values add (negative: remove)
@@ -369,7 +484,7 @@ export function patchJpegDensity(input, ppi, { allowStaleXmp = false } = {}) {
   const unpatched = [];
   if (found.photoshopResolution) unpatched.push('Photoshop resolution resource (APP13)');
   const xmpText = (p) => src.toString('latin1', p.start, p.end);
-  if (found.xmp.some((p) => xmpHasField(xmpText(p))) || xmpHasField(found.xmpExtended.join(''))) {
+  if (found.xmp.some((p) => xmpHasProperty(xmpText(p))) || xmpHasField(found.xmpExtended.join(''))) {
     let why = null;
     if (found.xmpExtended.length) why = 'the XMP is split over several segments (Extended XMP)';
     else for (const p of found.xmp) if ((why = rewriteXmp(out, shift + p.start, shift + p.end, n))) break;
