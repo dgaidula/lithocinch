@@ -167,6 +167,9 @@ export const DEFAULTS = Object.freeze({
   dryRun: false, // NEW: report what would happen, write nothing
 });
 
+/** An option that is not valid (a usage error, not a failed image). */
+export class ConfigError extends Error {}
+
 // Recognized raster extensions (lowercased, no dot). SVG is handled separately.
 export const RASTER_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'tif', 'tiff'];
 export const SVG_EXTS = ['svg'];
@@ -191,7 +194,7 @@ export const MAX_PPI = 65535;
 export function parsePpi(value, flag = '--density') {
   const n = typeof value === 'string' && /^[1-9][0-9]*$/.test(value) ? Number(value) : value;
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_PPI) {
-    throw new Error(`Invalid ${flag} "${value}". Expected a whole number of pixels per inch, 1-${MAX_PPI}`);
+    throw new ConfigError(`Invalid ${flag} "${value}". Expected a whole number of pixels per inch, 1-${MAX_PPI}`);
   }
   return n;
 }
@@ -212,7 +215,7 @@ export function resolveConfig(opts = {}) {
     if (cfg.format === 'keep' || cfg.format === 'original') cfg.format = null;
     // 'auto' is a mode (pick best per image), not a concrete format.
     if (cfg.format && cfg.format !== 'auto' && !OUTPUT_FORMATS.includes(cfg.format)) {
-      throw new Error(
+      throw new ConfigError(
         `Invalid --format "${cfg.format}". Expected: ${OUTPUT_FORMATS.join(', ')}, auto`
       );
     }
@@ -224,7 +227,7 @@ export function resolveConfig(opts = {}) {
       let fmt = String(f).toLowerCase().trim();
       if (fmt === 'jpg') fmt = 'jpeg';
       if (!['avif', 'webp', 'jpeg', 'png'].includes(fmt)) {
-        throw new Error(`Invalid --format-pool entry "${f}". Expected: avif, webp, jpeg, png`);
+        throw new ConfigError(`Invalid --format-pool entry "${f}". Expected: avif, webp, jpeg, png`);
       }
       return fmt;
     });
@@ -249,7 +252,7 @@ export function resolveConfig(opts = {}) {
           if (fmt === 'jpg') fmt = 'jpeg';
           if (fmt === 'tif') fmt = 'tiff';
           if (!OUTPUT_FORMATS.includes(fmt)) {
-            throw new Error(`Invalid --emit format "${f}". Expected: ${OUTPUT_FORMATS.join(', ')}`);
+            throw new ConfigError(`Invalid --emit format "${f}". Expected: ${OUTPUT_FORMATS.join(', ')}`);
           }
           return fmt;
         })
@@ -266,7 +269,7 @@ export function resolveConfig(opts = {}) {
     cfg.density = parsePpi(cfg.density, '--density');
     const cannot = (list) => list.filter((f) => !DENSITY_FORMATS.includes(f));
     const sayCannot = (what, bad) =>
-      new Error(
+      new ConfigError(
         `--density cannot be written to ${what} ${bad.join(', ')} output (only ${DENSITY_FORMATS.join(' and ')} carry it)`
       );
     if (cfg.format && cfg.format !== 'auto' && cannot([cfg.format]).length) {
@@ -277,7 +280,7 @@ export function resolveConfig(opts = {}) {
       // The shootout may only pick a format that can hold the density.
       cfg.formatPool = (cfg.formatPool?.length ? cfg.formatPool : DEFAULTS.formatPool).filter((f) => DENSITY_FORMATS.includes(f));
       if (!cfg.formatPool.length) {
-        throw new Error(`--density with --format auto needs jpeg or png in --format-pool`);
+        throw new ConfigError(`--density with --format auto needs jpeg or png in --format-pool`);
       }
     }
   }
@@ -303,12 +306,12 @@ export function parseColor(str) {
       const alpha = hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1;
       if ([r, g, b].every((n) => Number.isFinite(n))) return { r, g, b, alpha };
     }
-    throw new Error(`Invalid hex color: "${str}"`);
+    throw new ConfigError(`Invalid hex color: "${str}"`);
   }
   const parts = s.split(',').map((p) => Number(p.trim()));
   if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) {
     const [r, g, b, a] = parts;
     return { r, g, b, alpha: a == null || Number.isNaN(a) ? 1 : a };
   }
-  throw new Error(`Invalid color: "${str}" (use #rrggbb or r,g,b[,a])`);
+  throw new ConfigError(`Invalid color: "${str}" (use #rrggbb or r,g,b[,a])`);
 }

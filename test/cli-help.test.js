@@ -155,3 +155,26 @@ test('a run with errors exits 1 in --json exactly as in human mode', async () =>
     assert.equal(clean.status, 0, 'a run without errors still exits 0');
   });
 });
+
+test('lithocinch transform with a bad option, bad JSON or a bad density is a one-line error (exit 2), not a stack trace', async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, 'a.jpg');
+    const jpeg = await tiny('#888').jpeg().toBuffer();
+    await fs.writeFile(file, jpeg);
+    const stdin = (req) => spawnSync(process.execPath, [CLI, 'transform'], { encoding: 'utf8', input: JSON.stringify(req) });
+    const cases = {
+      '--format bogus': run('transform', '--in', file, '--format', 'bogus'),
+      '--ops not JSON': run('transform', '--in', file, '--ops', '{width:'),
+      'defaults.density abc': stdin({ image: jpeg.toString('base64'), defaults: { density: 'abc' } }),
+      'density with webp': stdin({ image: jpeg.toString('base64'), format: 'webp', defaults: { density: 72 } }),
+    };
+    for (const [label, r] of Object.entries(cases)) {
+      assert.equal(r.status, 2, `${label}: ${r.stderr}`);
+      assert.equal(r.stdout, '', label);
+      assert.match(r.stderr, /^error: \S.*\n$/, `${label}: one line`);
+    }
+    assert.match(cases['defaults.density abc'].stderr, /--density "abc"/);
+    const good = stdin({ image: jpeg.toString('base64'), format: 'jpeg', defaults: { density: 72 } });
+    assert.equal(good.status, 0, good.stderr);
+  });
+});

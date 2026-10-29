@@ -5,6 +5,7 @@
 import { promises as fs } from 'node:fs';
 import { parseArgs } from 'node:util';
 
+import { ConfigError } from './config.js';
 import { startServer } from './server.js';
 import { runTransform, handleJsonRequest } from './transform-api.js';
 
@@ -57,7 +58,16 @@ function parseFlags(name, argv, options) {
 
 export async function runSubcommand(name, argv, version) {
   if (name === 'serve') return serve(argv, version);
-  if (name === 'transform') return transform(argv, version);
+  if (name === 'transform') {
+    try {
+      return await transform(argv, version);
+    } catch (err) {
+      // One line, never a stack trace: exit 2 for a bad option or unparsable
+      // JSON (what the caller sent), 1 for a failure while transforming.
+      process.stderr.write(`error: ${String(err.message).split('\n')[0]}\n`);
+      process.exitCode = err instanceof ConfigError || err instanceof SyntaxError ? 2 : 1;
+    }
+  }
 }
 
 // --- lithocinch serve [--port N] [--host H] [--token T] [--max-body MB] ---
