@@ -56,11 +56,14 @@ async function caseInsensitive(dir) {
 }
 
 /**
- * The key two output paths under `outputRoot` are compared by: case-folded
- * (NFC first) where the volume ignores case, exact where it does not.
+ * The key two output paths under `outputRoot` are compared by: fully
+ * case-folded (ß ~ ss, µ ~ μ, as APFS folds) and NFC where the volume ignores
+ * case, exact where it does not.
  */
 export async function outputPathKey(outputRoot) {
-  return (await caseInsensitive(outputRoot)) ? (abs) => abs.normalize('NFC').toLowerCase() : (abs) => abs;
+  return (await caseInsensitive(outputRoot))
+    ? (abs) => abs.normalize('NFD').toLowerCase().toUpperCase().toLowerCase().normalize('NFC')
+    : (abs) => abs;
 }
 
 async function copyThrough(srcAbs, destAbs, dryRun) {

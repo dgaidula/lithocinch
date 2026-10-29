@@ -236,3 +236,26 @@ test('outputs that differ only in case collide where the volume ignores case (th
     }
   });
 });
+
+test('outputs that differ only by a full case fold (ß ~ ss) collide where the volume folds them', async () => {
+  await withDir(async (dir) => {
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    await tiny('#c00').png().toFile(path.join(input, 'Straße.png'));
+    await tiny('#00c').gif().toFile(path.join(input, 'Strasse.gif'));
+    // Ask the volume itself, independently of the code under test.
+    const folds = await fs.access(path.join(input, 'Strasse.png')).then(() => true, () => false);
+    const out = path.join(dir, 'out');
+    const r = run(input, '-o', out, '--error-dir', path.join(dir, 'err'), '--format', 'jpeg', '-q', '--json');
+    const stats = JSON.parse(r.stdout);
+    if (folds) {
+      assert.equal(r.status, 1, r.stderr);
+      // Sorted source order: Strasse.gif (s, 0x73) comes before Straße.png (ß, 0xdf) and keeps the output.
+      assert.deepEqual(stats.refusedFiles.map((f) => [f.file, f.reason]), [['Straße.png', 'Strasse.gif writes the same output: Straße_lco.jpg']]);
+      assert.deepEqual(await fs.readdir(out), ['Strasse_lco.jpg']);
+    } else if (!(await fs.access(path.join(input, 'STRASSE.GIF')).then(() => true, () => false))) {
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual((await fs.readdir(out)).sort(), ['Strasse_lco.jpg', 'Straße_lco.jpg']);
+    }
+  });
+});

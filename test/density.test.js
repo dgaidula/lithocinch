@@ -1075,11 +1075,18 @@ test('density sub-command: outputs that differ only in case or Unicode normaliza
     await fs.writeFile(path.join(dir, 'b/same.jpg'), await flat('#00c'));
     await fs.writeFile(path.join(dir, 'a', nfc), await flat('#c00'));
     await fs.writeFile(path.join(dir, 'b', nfd), await flat('#00c'));
+    // Full case fold (APFS): ß ~ ss, micro sign ~ Greek mu.
+    const folds = [['Straße.jpg', 'Strasse.jpg'], ['µ.jpg', 'μ.jpg']];
+    for (const [a, b] of folds) {
+      await fs.writeFile(path.join(dir, 'a', a), await flat('#c00'));
+      await fs.writeFile(path.join(dir, 'b', b), await flat('#00c'));
+    }
     // Ask the volume itself, independently of the code under test.
     const caseBlind = await fs.access(path.join(dir, 'a/SAME.JPG')).then(() => true, () => false);
     const formBlind = caseBlind && (await fs.access(path.join(dir, 'a', nfd)).then(() => true, () => false));
+    const foldBlind = await Promise.all(folds.map(([, b]) => fs.access(path.join(dir, 'a', b)).then(() => true, () => false)));
     const out = path.join(dir, 'out');
-    const args = ['a/Same.jpg', 'b/same.jpg', `a/${nfc}`, `b/${nfd}`].map((f) => path.join(dir, f));
+    const args = ['a/Same.jpg', 'b/same.jpg', `a/${nfc}`, `b/${nfd}`, ...folds.flatMap(([a, b]) => [`a/${a}`, `b/${b}`])].map((f) => path.join(dir, f));
     const r = run('density', ...args, '--ppi', '72', '-o', out, '--json');
     const items = JSON.parse(r.stdout).items;
     const red = async (f) => {
@@ -1095,10 +1102,20 @@ test('density sub-command: outputs that differ only in case or Unicode normaliza
       assert.deepEqual(items.slice(0, 2).map((it) => it.verdict), ['ok', 'ok']);
     }
     if (formBlind) {
-      assert.deepEqual(items.slice(2).map((it) => it.verdict), ['ok', 'refuse']);
+      assert.deepEqual(items.slice(2, 4).map((it) => it.verdict), ['ok', 'refuse']);
       assert.ok(await red('Café_lco.jpg'), 'the first file (red) keeps the output');
     }
-    if (caseBlind) assert.equal((await fs.readdir(out)).length, 2, 'one output per pair');
+    for (const [k, [a]] of folds.entries()) {
+      const pair = items.slice(4 + 2 * k, 6 + 2 * k);
+      if (foldBlind[k]) {
+        assert.deepEqual(pair.map((it) => [it.verdict, it.summary]).slice(1), [['refuse', 'output collides']], a);
+        assert.equal(pair[0].verdict, 'ok', a);
+        assert.ok(await red(a.replace('.jpg', '_lco.jpg')), `the first file (red) keeps the output: ${a}`);
+      } else if (!caseBlind) {
+        assert.deepEqual(pair.map((it) => it.verdict), ['ok', 'ok'], a);
+      }
+    }
+    if (caseBlind) assert.equal((await fs.readdir(out)).length, 4, 'one output per pair');
   });
 });
 
