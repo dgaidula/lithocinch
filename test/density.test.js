@@ -312,6 +312,7 @@ test('XMP forms a narrow rewrite cannot handle safely are refused, never half-ed
     ['entity in the value', { attrs: ' tiff:XResolution="&#51;00/1"' }],
     ['rational unit', { attrs: ' tiff:ResolutionUnit="2/1"' }],
     ['nested markup', { elements: '<tiff:XResolution><rdf:Alt>300/1</rdf:Alt></tiff:XResolution>' }],
+    ['mismatched closing tag', { elements: '<tiff:XResolution>300/1</tiff:YResolution>' }],
   ]) {
     const src = splice(await bareJpeg(), jfif(), xmpPacket(props));
     assert.throws(() => patchJpegDensity(src, 72), (e) => e instanceof DensityError && e.code === 'stale-xmp', label);
