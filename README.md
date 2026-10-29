@@ -251,9 +251,12 @@ exists:
 
 A JPEG with neither JFIF nor EXIF (what sharp writes, so every file lithocinch
 itself has optimized) gets an 18-byte JFIF header inserted. That is done only
-when it cannot change how a decoder reads the colours: a file with an Adobe
-marker, with four components, or with components labelled R, G, B is refused
-instead.
+when it cannot change how a decoder reads the colours: a file with four
+components, with components labelled R, G, B, or with an Adobe marker is
+refused instead. The one Adobe marker accepted is transform 1 (YCbCr, which is
+what JFIF means too) over three components, as Photoshop’s “Save for Web”
+writes; sharp, ImageMagick and Apple ImageIO decode such a file identically
+with the header added.
 
 XMP matters because Apple ImageIO (Preview, Finder) reads it before JFIF: a
 JPEG whose XMP says 300 still shows 300 there after its JFIF header says 72.
@@ -401,12 +404,12 @@ The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `r
   packet holds the resolution and whose extension names none is refused all
   the same, and with `--allow-stale-xmp` its main packet is written unchanged
   rather than rewritten.
-- **`lithocinch density` refuses Photoshop “Save for Web” JPEGs.** They carry
-  an Adobe APP14 marker and EXIF without a resolution, and no JFIF header, so
-  there is nothing to rewrite and a JFIF header is not added next to an Adobe
-  marker (see above). In a survey of local files this was 85 of 2,980 JPEGs
-  (2.9%) and 18 of 60 made by Photoshop. The main command’s `--density`, which
-  re-encodes, handles them.
+- **`lithocinch density` refuses other Adobe-marked JPEGs that have no JFIF
+  header or EXIF resolution.** Only an Adobe APP14 marker with transform 1
+  over three components (Photoshop’s “Save for Web”) takes an inserted JFIF
+  header; transform 0 (RGB, or CMYK), transform 2 (YCCK), four components, or
+  a second marker that disagrees is refused (see above). The main command’s
+  `--density`, which re-encodes, handles them.
 - **The thumbnail’s EXIF (IFD1) is not rewritten or reported.** ImageMagick
   and Apple ImageIO both read IFD0.
 - **PNG density is per metre**, so 72 ppi reads back as 72.01 and 300 as

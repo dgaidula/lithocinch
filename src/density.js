@@ -67,7 +67,7 @@ function scanJpeg(buf) {
     jfif: null, // offset of the JFIF payload (after "JFIF\0")
     exif: [], // {pos, kind:'rational'|'unit', le}
     exifPresent: false,
-    adobe: false,
+    adobe: [], // the transform byte of each Adobe APP14 segment (null when too short to hold one)
     components: null, // [ids] from the SOF segment
     xmp: [], // {start, end} of each XMP packet (after its namespace header)
     xmpExtended: [], // the text of each Extended XMP segment
@@ -107,7 +107,8 @@ function scanJpeg(buf) {
       if (at === -1) found.photoshopResolution = true;
       else if (at != null) found.photoshop.push(at);
     } else if (m === 0xee && text(5) === 'Adobe') {
-      found.adobe = true;
+      // "Adobe", version, flags0, flags1 (2 bytes each), then transform: 0 RGB or CMYK, 1 YCbCr, 2 YCCK.
+      found.adobe.push(len >= 14 ? buf[seg + 11] : null);
     } else if (isSof(m) && !found.components) {
       const n = buf[seg + 5];
       if (len < 8 + 3 * n) throw corrupt('SOF segment is shorter than its component list');
@@ -394,12 +395,16 @@ function rewriteXmp(out, start, end, n) {
 /**
  * A JFIF segment makes a decoder read three components as YCbCr and one as
  * grey. Insert one only where the decoder would have decided that anyway, so
- * the pixels cannot change: no Adobe marker, one or three components, and
- * three component ids that are not the letters R, G, B (which mean RGB).
+ * the pixels cannot change: one or three components, three component ids
+ * that are not the letters R, G, B (which mean RGB), and no Adobe marker
+ * unless every one says transform 1 (YCbCr, as JFIF does) over three
+ * components, as Photoshop's "Save for Web" writes.
  */
 function canInsertJfif(found) {
-  if (found.adobe) return 'it has an Adobe APP14 marker, and adding JFIF could change how its colours decode';
   const c = found.components;
+  if (found.adobe.length && !(c?.length === 3 && found.adobe.every((t) => t === 1))) {
+    return 'it has an Adobe APP14 marker, and adding JFIF could change how its colours decode';
+  }
   if (!c) return 'it has no frame header to check its colour model against';
   if (c.length !== 1 && c.length !== 3) return `it has ${c.length} colour components, and JFIF is for 1 or 3`;
   if (c.length === 3 && c[0] === 0x52 && c[1] === 0x47 && c[2] === 0x42) {

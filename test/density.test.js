@@ -506,6 +506,33 @@ test('JFIF is not inserted where the colour model cannot be checked: four compon
   assert.throws(() => patchJpegDensity(Buffer.concat([soi, sos, eoi]), 72), (e) => e.code === 'unsupported' && /no frame header/.test(e.message));
 });
 
+/** An Adobe APP14 segment: "Adobe", version 100, flags0, flags1, then the transform byte. */
+const app14 = (transform) => Buffer.from([0xff, 0xee, 0, 14, 0x41, 0x64, 0x6f, 0x62, 0x65, 0, 100, 0, 0, 0, 0, transform]);
+
+test('Adobe APP14 transform 1 over three components (Photoshop "Save for Web") takes a JFIF header and decodes the same; every other APP14 is refused', async () => {
+  const bare = await bareJpeg();
+  const saveForWeb = splice(bare, app14(1));
+  const out = patchJpegDensity(saveForWeb, 72);
+  assert.deepEqual(out.patched, ['JFIF (inserted)']);
+  assert.deepEqual(readJpegDensity(out.data).jfif, { units: 1, x: 72, y: 72 });
+  assert.ok(out.data.subarray(20).equals(saveForWeb.subarray(2)), 'everything after the inserted segment is the original');
+  const before = await rgba(saveForWeb);
+  assert.ok(before.equals(await rgba(out.data)), 'decoded pixels differ after the JFIF insertion');
+  assert.ok(before.equals(await rgba(bare)), 'transform 1 decodes as the same YCbCr as no marker at all');
+
+  const refusedAdobe = (e) => e instanceof DensityError && e.code === 'unsupported' && /it has an Adobe APP14 marker, and adding JFIF could change how its colours decode/.test(e.message);
+  const sof4 = seg(0xc0, Buffer.from([8, 0, 8, 0, 8, 4, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0]));
+  const sos = seg(0xda, Buffer.from([1, 1, 0, 0, 63, 0]));
+  const refused = {
+    'transform 0 (RGB)': splice(bare, app14(0)),
+    'transform 2 (YCCK)': splice(bare, app14(2)),
+    'transform 1 over four components (CMYK)': Buffer.concat([Buffer.from([0xff, 0xd8]), app14(1), sof4, sos, Buffer.from([0, 0xff, 0xd9])]),
+    'a second APP14 that says transform 0': splice(bare, app14(1), app14(0)),
+    'an APP14 too short to hold a transform': splice(bare, Buffer.from([0xff, 0xee, 0, 13, 0x41, 0x64, 0x6f, 0x62, 0x65, 0, 100, 0, 0, 0, 0])),
+  };
+  for (const [name, src] of Object.entries(refused)) assert.throws(() => patchJpegDensity(src, 72), refusedAdobe, name);
+});
+
 // ---- pixel identity ---------------------------------------------------------
 
 test('pixel identity: the patched JPEG decodes to the same RGBA and every byte outside the density fields is unchanged', async () => {
