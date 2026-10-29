@@ -208,7 +208,7 @@ AVIFs. Pair with `<picture>`:
 
 ## Resolution headers (`--density` and `lithocinch density`)
 
-**Hardened:** 2026-10-29 · 8b85bbf · gate CLOSED WITH FOLLOW-UPS (release gate at `xhigh` FIX FIRST, two fix rounds, re-gate and closure re-check; for the `--density` release)
+**Hardened:** 2026-10-29 · 9488d26 · gate CLOSED WITH FOLLOW-UPS (release gate at `xhigh` FIX FIRST, two fix rounds, re-gate and closure re-check at 8b85bbf; then D523, D524 and D527, release gate at `xhigh` PASS WITH FOLLOW-UPS, one fix round (D534) and closure re-check; for 3.3.0)
 
 Some submission forms ask for an exact resolution (72 ppi for one awards
 program, 300 for print). The number lives in a few header bytes that do not
@@ -442,8 +442,14 @@ The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `r
   over-refusal; `--allow-stale-xmp` writes the file anyway.
 - **Collision checks and volumes.** When the output folder does not exist yet
   and its nearest existing parent is a volume’s root, the case probe can ask the
-  wrong volume. On a case-sensitive volume, two names that differ only in
-  Unicode normalization (`café` written two ways) are not caught.
+  wrong volume. On a case-sensitive APFS volume, which still ignores Unicode
+  normalization, two names that differ only in normalization (`café` written
+  two ways) are not caught, and the second file wins. Where the volume ignores
+  case, names are compared under a full case fold, which refuses more than some
+  volumes need: the Turkish dotless `ı` matches `i` (APFS keeps `ılık` and
+  `ilik` apart), and on exFAT (and probably NTFS) `Straße`/`Strasse` and
+  `µ`/`μ` are refused although the volume keeps both. These refusals never
+  overwrite anything.
 - **Two XMP packets.** When the second cannot be rewritten,
   `--allow-stale-xmp` writes the first one rewritten, and the warning names the
   first packet’s new value rather than the stale one.

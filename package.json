@@ -1,6 +1,6 @@
 {
   "name": "lithocinch",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Fast, batch image optimizer built on sharp + svgo. Caps dimensions, normalizes color to sRGB, compresses JPEG/PNG/GIF/WebP/AVIF/TIFF and SVG. Usable as a CLI, a library, or an AWS Lambda.",
   "type": "module",
   "exports": {
