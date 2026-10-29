@@ -529,6 +529,8 @@ test('Adobe APP14 transform 1 over three components (Photoshop "Save for Web") t
     'transform 1 over four components (CMYK)': Buffer.concat([Buffer.from([0xff, 0xd8]), app14(1), sof4, sos, Buffer.from([0, 0xff, 0xd9])]),
     'a second APP14 that says transform 0': splice(bare, app14(1), app14(0)),
     'an APP14 too short to hold a transform': splice(bare, Buffer.from([0xff, 0xee, 0, 13, 0x41, 0x64, 0x6f, 0x62, 0x65, 0, 100, 0, 0, 0, 0])),
+    // 11 bytes past its start lies the next segment, with a 1 there that must not be read as transform 1.
+    'an APP14 of "Adobe" only, then a segment with 1 where the transform would be': splice(bare, Buffer.from([0xff, 0xee, 0, 7, 0x41, 0x64, 0x6f, 0x62, 0x65]), seg(0xe5, Buffer.from([0, 0, 1, 0]))),
   };
   for (const [name, src] of Object.entries(refused)) assert.throws(() => patchJpegDensity(src, 72), refusedAdobe, name);
 });
