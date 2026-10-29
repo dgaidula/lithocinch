@@ -5,7 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 const run = (...args) => spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', input: '' });
@@ -118,4 +122,36 @@ for (const mode of ['--json', '--quiet', '-q']) {
 test('lithocinch --help and --version take precedence over --cheat', () => {
   assert.equal(run('--cheat', '--help').stdout, run('--help').stdout);
   assert.equal(run('--cheat', '--version').stdout, run('--version').stdout);
+});
+
+// ---- exit status of a run ---------------------------------------------------
+
+/** Run `fn(dir)` in a fresh temporary folder, removed afterwards. */
+async function withDir(fn) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lco-cli-'));
+  try {
+    await fn(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+const tiny = (background, w = 32, h = 24) => sharp({ create: { width: w, height: h, channels: 3, background } });
+
+test('a run with errors exits 1 in --json exactly as in human mode', async () => {
+  await withDir(async (dir) => {
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    await tiny('#888').jpeg().toFile(path.join(input, 'good.jpg'));
+    await fs.writeFile(path.join(input, 'broken.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]));
+    const to = (o) => [input, '-o', path.join(dir, o), '--error-dir', path.join(dir, `${o}-err`), '-q'];
+    const human = run(...to('h'));
+    assert.equal(human.status, 1, human.stderr);
+    const json = run(...to('j'), '--json');
+    assert.equal(json.status, 1, json.stderr);
+    assert.equal(JSON.parse(json.stdout).errors, 1);
+    await fs.rm(path.join(input, 'broken.jpg'));
+    const clean = run(...to('c'), '--json');
+    assert.equal(clean.status, 0, 'a run without errors still exits 0');
+  });
 });

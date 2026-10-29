@@ -327,6 +327,7 @@ program.action(async (input, opts) => {
   }
 
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  if (stats.errors) process.exitCode = 1; // in every output mode, --json included
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ...stats, ms: Math.round(ms) }, null, 2) + '\n');
@@ -360,7 +361,6 @@ program.action(async (input, opts) => {
   );
   if (stats.errors) {
     process.stderr.write(pc.red(`  see ${path.resolve(options.errorDir)} for the ${stats.errors} failed file(s)\n`));
-    process.exitCode = 1;
   }
 });
 
