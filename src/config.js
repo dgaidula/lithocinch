@@ -39,6 +39,10 @@ export const DEFAULTS = Object.freeze({
   // (now sRGB) ICC profile + EXIF instead of stripping it.
   colorspace: 'srgb',
   keepMetadata: false,
+  // Resolution (pixels per inch) to write into the output's header, or null to
+  // leave it alone. Written after encoding by rewriting header bytes only (see
+  // density.js), so it costs 0-21 bytes, not a re-encode. JPEG and PNG only.
+  density: null,
 
   // ---- format / encoders ----
   format: null, // null = keep; 'jpeg'|'png'|'webp'|'avif'|'gif'|'tiff'; or 'auto' (pick best per image)
@@ -170,6 +174,27 @@ export const SVG_EXTS = ['svg'];
 // Valid `--format` targets.
 export const OUTPUT_FORMATS = ['jpeg', 'png', 'webp', 'avif', 'gif', 'tiff'];
 
+// Output formats lithocinch can write a `density` into (see density.js).
+export const DENSITY_FORMATS = ['jpeg', 'png'];
+
+// JFIF stores each axis density in 16 bits, so that is the ceiling.
+export const MAX_PPI = 65535;
+
+/**
+ * Validate a resolution in pixels per inch: a whole number from 1 to 65535.
+ * Shared by the `--density` option and the `density` sub-command's `--ppi`.
+ * @param {unknown} value
+ * @param {string} [flag]  name used in the error message
+ * @returns {number}
+ */
+export function parsePpi(value, flag = '--density') {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_PPI) {
+    throw new Error(`Invalid ${flag} "${value}". Expected a whole number of pixels per inch, 1-${MAX_PPI}`);
+  }
+  return n;
+}
+
 /**
  * Merge partial user options over the frozen defaults, returning a fresh config.
  * Performs light validation/normalization so every entry point behaves the same.
@@ -231,6 +256,29 @@ export function resolveConfig(opts = {}) {
     ];
   } else {
     cfg.emit = [];
+  }
+
+  // Resolution header. Refuse what is knowable from the options alone; a format
+  // that is only known per file (--format keep on a mixed folder) is reported
+  // per file instead, so the output never pretends to carry a density it lacks.
+  if (cfg.density != null) {
+    cfg.density = parsePpi(cfg.density, '--density');
+    const cannot = (list) => list.filter((f) => !DENSITY_FORMATS.includes(f));
+    const sayCannot = (what, bad) =>
+      new Error(
+        `--density cannot be written to ${what} ${bad.join(', ')} output (only ${DENSITY_FORMATS.join(' and ')} carry it)`
+      );
+    if (cfg.format && cfg.format !== 'auto' && cannot([cfg.format]).length) {
+      throw sayCannot('--format', cannot([cfg.format]));
+    }
+    if (cannot(cfg.emit).length) throw sayCannot('--emit', cannot(cfg.emit));
+    if (cfg.format === 'auto') {
+      // The shootout may only pick a format that can hold the density.
+      cfg.formatPool = (cfg.formatPool?.length ? cfg.formatPool : DEFAULTS.formatPool).filter((f) => DENSITY_FORMATS.includes(f));
+      if (!cfg.formatPool.length) {
+        throw new Error(`--density with --format auto needs jpeg or png in --format-pool`);
+      }
+    }
   }
 
   return cfg;

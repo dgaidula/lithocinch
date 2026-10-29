@@ -23,6 +23,7 @@ import { finalizeGif } from './gif.js';
 import { pickBestFormat } from './best-format.js';
 import { contentAwareEncode } from './content-aware.js';
 import { ssim, toLuma } from './ssim.js';
+import { applyDensity } from './density.js';
 
 const EFFORT_RANGE = {
   png: [1, 10],
@@ -212,12 +213,30 @@ async function optimizeAnimated(input, meta, cfg, format, resized, pipeline) {
 /**
  * Optimize a single raster image.
  *
+ * With `density` set, the finished output's resolution header is rewritten
+ * (density.js) and the result carries `density`: `{ applied, ppi, patched,
+ * unpatched }`, or `{ applied: false, ppi, reason }` when the chosen output
+ * can't hold one (WebP, AVIF, GIF, TIFF). The data is then left as encoded.
+ *
  * @param {Buffer|Uint8Array} input  encoded image bytes
  * @param {Partial<import('./config.js').DEFAULTS>} [options]
- * @returns {Promise<{ data: Buffer, info: sharp.OutputInfo, inputFormat: string, outputFormat: string, resized: boolean, quality: number|null, ssim?: number|null }>}
+ * @returns {Promise<{ data: Buffer, info: sharp.OutputInfo, inputFormat: string, outputFormat: string, resized: boolean, quality: number|null, ssim?: number|null, density?: object }>}
  */
 export async function optimizeImageBuffer(input, options = {}) {
   const cfg = options.__resolved ? options : resolveConfig(options);
+  const result = await optimizeRaster(input, { ...cfg, __resolved: true });
+  if (cfg.density == null) return result;
+  const { data, ...density } = applyDensity(result.data, result.outputFormat, cfg.density);
+  return {
+    ...result,
+    data,
+    info: { ...result.info, size: data.length },
+    density,
+  };
+}
+
+async function optimizeRaster(input, options) {
+  const cfg = options;
   const inputBuf = Buffer.isBuffer(input) ? input : Buffer.from(input);
 
   const meta = await sharp(inputBuf, { failOn: 'none' }).metadata();

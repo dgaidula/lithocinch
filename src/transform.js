@@ -17,7 +17,7 @@ import { buildOutputName, extNoDot } from './naming.js';
  * @param {Buffer|Uint8Array|string} bytes
  * @param {string} filename
  * @param {Partial<import('./config.js').DEFAULTS>} [options]
- * @returns {Promise<{ data: Buffer, outName: string, kind: 'svg'|'raster', inputFormat?: string, outputFormat?: string }>}
+ * @returns {Promise<{ data: Buffer, outName: string, kind: 'svg'|'raster', inputFormat?: string, outputFormat?: string, density?: object }>}
  */
 export async function optimizeBytes(bytes, filename, options = {}) {
   const cfg = options.__resolved ? options : resolveConfig(options);
@@ -40,7 +40,7 @@ export async function optimizeBytes(bytes, filename, options = {}) {
     throw new Error(`Unsupported image extension: ".${ext}" (${filename})`);
   }
 
-  const { data, inputFormat, outputFormat, quality, ssim, engine } = await optimizeImageBuffer(
+  const { data, inputFormat, outputFormat, quality, ssim, engine, density } = await optimizeImageBuffer(
     Buffer.from(bytes),
     { ...cfg, __resolved: true }
   );
@@ -53,6 +53,7 @@ export async function optimizeBytes(bytes, filename, options = {}) {
     quality,
     ssim,
     engine,
+    density, // only when cfg.density is set; see optimizeImageBuffer
     outName: buildOutputName(filename, {
       suffix: cfg.suffix,
       outputFormat: formatChanged ? outputFormat : null,

@@ -11,7 +11,7 @@ import cliProgress from 'cli-progress';
 import pc from 'picocolors';
 
 import { processDirectory } from './process-dir.js';
-import { OUTPUT_FORMATS } from './config.js';
+import { OUTPUT_FORMATS, resolveConfig } from './config.js';
 
 const pkg = JSON.parse(
   readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8')
@@ -48,11 +48,15 @@ const CHEAT = `# lithocinch
 
 // Sub-commands for the transform-API backends (CMS plugin / Lambda backbone) are
 // dispatched before the directory-optimize command so they don't get parsed as
-// an input path. `serve` = HTTP daemon, `transform` = one-shot stdin/stdout JSON.
+// an input path. `serve` = HTTP daemon, `transform` = one-shot stdin/stdout JSON,
+// `density` = rewrite JPEG resolution headers without re-encoding.
 const sub = process.argv[2];
 if (sub === 'serve' || sub === 'transform') {
   const { runSubcommand } = await import('./cli-service.js');
   await runSubcommand(sub, process.argv.slice(3), pkg.version);
+} else if (sub === 'density') {
+  const { runDensity } = await import('./density-cli.js');
+  await runDensity(process.argv.slice(3), pkg.version);
 } else {
 
 const program = new Command();
@@ -81,6 +85,7 @@ program
   .option('--trim', 'trim surrounding same-color borders before encoding', false)
   // --- color / metadata ---
   .option('--keep-metadata', 're-embed sRGB ICC profile + EXIF instead of stripping', false)
+  .option('--density <ppi>', 'write this resolution (pixels per inch) into JPEG and PNG output headers; other formats are refused or reported')
   // --- format / quality ---
   .addOption(
     new Option('-f, --format <fmt>', 'output format; "auto" picks the smallest per image').choices([
@@ -195,6 +200,7 @@ program.action(async (input, opts) => {
     bgColor: opts.bgColor,
     trim: opts.trim,
     keepMetadata: opts.keepMetadata,
+    density: opts.density ?? null, // validated by resolveConfig (src/config.js)
     format: opts.format ?? null,
     formatPool: opts.formatPool ? opts.formatPool.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
     formatTolerance: Number(opts.formatTolerance),
@@ -242,6 +248,16 @@ program.action(async (input, opts) => {
     concurrency: Number(opts.concurrency),
     dryRun: opts.dryRun,
   };
+
+  // A bad --density (not a whole number, or a format that cannot hold it) is a
+  // usage error, like a bad --format choice, not a failed run.
+  if (opts.density != null) {
+    try {
+      resolveConfig(options);
+    } catch (err) {
+      program.error(`error: ${err.message}`, { exitCode: 2 });
+    }
+  }
 
   const t0 = process.hrtime.bigint();
   let bar = null;
@@ -332,6 +348,9 @@ program.action(async (input, opts) => {
       `  errors    : ${stats.errors ? pc.red(stats.errors) : 0}\n` +
       `  copied    : ${stats.copied}\n` +
       (stats.emitted ? `  emitted   : ${stats.emitted} extra (${fmtBytes(stats.emittedBytes)})\n` : '') +
+      (stats.density
+        ? `  density   : ${stats.density.ppi} ppi written to ${stats.density.applied}, not written to ${stats.density.notApplied ? pc.yellow(stats.density.notApplied) : 0}\n`
+        : '') +
       `  size      : ${fmtBytes(stats.bytesIn)} -> ${fmtBytes(stats.bytesOut)} ` +
       `(${pc.green(`-${pct}%`)}, saved ${fmtBytes(saved)})\n` +
       `  time      : ${(ms / 1000).toFixed(2)}s\n`

@@ -16,3 +16,4 @@ export { runTransform, handleJsonRequest, serializeOutputs } from './transform-a
 export { createServer, startServer } from './server.js';
 export { resolveConfig, DEFAULTS, parseColor, RASTER_EXTS, SVG_EXTS, OUTPUT_FORMATS } from './config.js';
 export { buildOutputName, extNoDot } from './naming.js';
+export { patchJpegDensity, patchPngDensity, readJpegDensity, readPngDensity, DensityError } from './density.js';

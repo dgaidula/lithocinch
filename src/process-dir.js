@@ -76,6 +76,15 @@ export async function processDirectory(options = {}, hooks = {}) {
     bytesOut: 0,
     errorFiles: [],
   };
+  // --density: how many outputs carry it, and which could not (reason per file).
+  if (cfg.density != null) stats.density = { ppi: cfg.density, applied: 0, notApplied: 0, notAppliedFiles: [] };
+  const noteDensity = (rel, outRel, d) => {
+    if (!stats.density || !d) return; // not asked for, or an SVG (no raster density to write)
+    if (d.applied) return void stats.density.applied++;
+    stats.density.notApplied++;
+    stats.density.notAppliedFiles.push({ file: rel, output: outRel, reason: d.reason });
+    log.warn(`${rel}: density not written: ${d.reason}`);
+  };
 
   // Discover image files (relative to inputRoot). Exclude the output/error dirs
   // in case they live inside the input tree, and skip log files.
@@ -157,6 +166,7 @@ export async function processDirectory(options = {}, hooks = {}) {
           await fs.mkdir(path.dirname(destAbs), { recursive: true });
           await fs.writeFile(destAbs, result.data);
         }
+        noteDensity(job.rel, relOut, result.density);
         stats.processed++;
         stats.bytesIn += bytes.length;
         stats.bytesOut += result.data.length;
@@ -204,6 +214,7 @@ export async function processDirectory(options = {}, hooks = {}) {
             await fs.mkdir(path.dirname(sibDest), { recursive: true });
             await fs.writeFile(sibDest, sib.data);
           }
+          noteDensity(job.rel, sibRel, sib.density);
           stats.emitted++;
           stats.emittedBytes += sib.data.length;
           manifestEntries.push({ input: job.rel, output: sibRel, format: fmt, bytesOut: sib.data.length, emitted: true });
