@@ -111,3 +111,13 @@ test('optimizeSvg can be told to drop viewBox', () => {
   const out = optimizeSvg(svg, { svgRemoveViewBox: true });
   assert.ok(!out.includes('viewBox'));
 });
+
+test('sharp is pinned to the exact version the lockfile installs', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const read = async (p) => JSON.parse(await readFile(new URL(p, import.meta.url), 'utf8'));
+  const pkg = await read('../package.json');
+  const lock = await read('../package-lock.json');
+  assert.match(pkg.dependencies.sharp, /^\d+\.\d+\.\d+$/, 'an exact version, not a range');
+  assert.equal(lock.packages[''].dependencies.sharp, pkg.dependencies.sharp);
+  assert.equal(lock.packages['node_modules/sharp'].version, pkg.dependencies.sharp);
+});
