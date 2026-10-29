@@ -8,14 +8,14 @@
 // Output modes (human, --brief, --json, --quiet) are all rendered from one
 // list of items, one per input file, so they cannot disagree.
 
-import { promises as fs } from 'node:fs';
+import { promises as fs, rmSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import sharp from 'sharp';
 import { glob } from 'tinyglobby';
 
-import { parsePpi } from './config.js';
+import { parsePpi, RASTER_EXTS } from './config.js';
 import { patchJpegDensity, readJpegDensity, DensityError } from './density.js';
 import { buildOutputName } from './naming.js';
 import { runPool } from './pool.js';
@@ -23,11 +23,13 @@ import { runPool } from './pool.js';
 const HELP = `Usage: lithocinch density <file-or-folder...> --ppi <n> [options]
 
 Set the resolution header of JPEGs to <n> pixels per inch without re-encoding:
-the JFIF density and the EXIF XResolution/YResolution/ResolutionUnit are
-rewritten in place and every other byte, the image data included, is copied
-unchanged. A JPEG with neither gets a 18-byte JFIF header (unless that could
-change how its colours decode, in which case it is refused). Folders are
-scanned recursively for .jpg and .jpeg.
+the JFIF density, the EXIF XResolution/YResolution/ResolutionUnit and
+Photoshop's resolution resource are rewritten in place and every other byte,
+the image data included, is copied unchanged. A JPEG with neither JFIF nor
+EXIF gets an 18-byte JFIF header (unless that could change how its colours
+decode, in which case it is refused). XMP resolution values are not rewritten
+and make the file a warn. Folders are scanned recursively for .jpg and .jpeg;
+other images found there are listed as skipped.
 
 Options:
   --ppi <n>        resolution to write, a whole number 1-65535 (required)
@@ -43,8 +45,8 @@ Options:
 To rewrite files where they are: -o <their folder> --suffix "" --overwrite
 (each file is written to a temporary name and renamed, never half-written).
 
-Exit status: 0 all files done or skipped; 1 some file was refused or failed;
-2 usage error; 3 the run could not complete.
+Exit status: 0 all files done or skipped; 1 some file was refused, failed or
+warned about, or no JPEG was found; 2 usage error; 3 the run could not complete.
 `;
 
 const VERDICTS = ['ok', 'warn', 'skip', 'refuse', 'fail'];
@@ -77,10 +79,18 @@ function describe(d) {
   return parts.join(', ') || 'no density header';
 }
 
+/** Temporary files being written now, removed if the run is interrupted (SIGINT, SIGTERM). */
+const inFlight = new Set();
+let interrupted = null; // the signal, once one arrives
+
+const exitInterrupted = () => process.exit(interrupted === 'SIGINT' ? 130 : 143);
+
 /** Write via a temporary name in the same folder, then rename, so a failure leaves no partial file. */
 async function writeAtomic(dest, data, mode) {
+  if (interrupted) throw new Error(`interrupted by ${interrupted}`);
   await fs.mkdir(path.dirname(dest), { recursive: true });
   const tmp = path.join(path.dirname(dest), `.${path.basename(dest)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`);
+  inFlight.add(tmp);
   try {
     await fs.writeFile(tmp, data, { flag: 'wx' });
     await fs.chmod(tmp, mode);
@@ -88,7 +98,27 @@ async function writeAtomic(dest, data, mode) {
   } catch (err) {
     await fs.rm(tmp, { force: true });
     throw err;
+  } finally {
+    inFlight.delete(tmp);
+    if (interrupted) {
+      // The write was in the thread pool when the signal came: clean up once it settles.
+      rmSync(tmp, { force: true });
+      if (!inFlight.size) exitInterrupted();
+    }
   }
+}
+
+/**
+ * On SIGINT or SIGTERM: start no new write, let each one in flight settle and
+ * remove its temporary file, then exit 130 or 143. A second signal exits at once.
+ */
+function onSignal(signal) {
+  if (interrupted) {
+    for (const tmp of inFlight) rmSync(tmp, { force: true });
+    exitInterrupted();
+  }
+  interrupted = signal;
+  if (!inFlight.size) exitInterrupted();
 }
 
 /**
@@ -134,14 +164,18 @@ async function processFile(job, o) {
   } catch (err) {
     return finish('refuse', 'damaged JPEG', firstLine(err.message));
   }
-  // Read the result back: every field present must now say the new ppi.
+  // Read the result back: every field present must now say the new ppi, and
+  // every field found before the rewrite must still be there.
   const after = readJpegDensity(patch.data);
   const jfifOk = !after.jfif || (after.jfif.units === 1 && after.jfif.x === o.ppi && after.jfif.y === o.ppi);
   const exifOk =
     !after.exif ||
     ((after.exif.unit == null || after.exif.unit === 2) &&
       [after.exif.x, after.exif.y].every((v) => !v || (v[0] === o.ppi && v[1] === 1)));
-  if (!jfifOk || !exifOk) return finish('fail', 'internal check failed', 'the rewritten header did not read back as requested; nothing written');
+  const keptOk =
+    (!before.jfif || after.jfif) &&
+    (!before.exif || (after.exif && ['x', 'y', 'unit'].every((k) => before.exif[k] == null || after.exif[k] != null)));
+  if (!jfifOk || !exifOk || !keptOk) return finish('fail', 'internal check failed', 'the rewritten header did not read back as requested; nothing written');
 
   Object.assign(item.data, {
     before: describe(before),
@@ -211,11 +245,17 @@ async function plan(args, o) {
       const rel = path.relative(root, o.outputRoot);
       const ignore = ['**/node_modules/**'];
       if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) ignore.push(`${rel.split(path.sep).join('/')}/**`);
-      const found = (await glob(['**/*.jpg', '**/*.jpeg'], { cwd: root, caseSensitiveMatch: false, onlyFiles: true, dot: false, ignore })).sort();
+      const globOpts = { cwd: root, caseSensitiveMatch: false, onlyFiles: true, dot: false, ignore };
+      const found = (await glob(['**/*.jpg', '**/*.jpeg'], globOpts)).sort();
       if (!found.length) {
         items.push({ path: arg, name: arg, verdict: 'skip', summary: 'no JPEG files', reason: 'folder holds no .jpg or .jpeg files', changed: false, data: {} });
       }
       for (const f of found) addJob(path.join(root, f), f);
+      // Other images are named, so an incomplete output folder is not a surprise.
+      const others = RASTER_EXTS.filter((e) => e !== 'jpg' && e !== 'jpeg').map((e) => `**/*.${e}`);
+      for (const f of (await glob(others, globOpts)).sort()) {
+        items.push({ path: path.join(root, f), name: f, verdict: 'skip', summary: 'not a JPEG', reason: 'lithocinch density rewrites JPEGs only', changed: false, data: {} });
+      }
     } else {
       addJob(path.resolve(arg), path.basename(arg));
     }
@@ -316,6 +356,8 @@ export async function runDensity(argv, version) {
     outputRoot: path.resolve(values.output),
   };
 
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
   try {
     const entries = await plan(positionals, o);
     const jobs = entries.filter((e) => e.job);
@@ -326,11 +368,15 @@ export async function runDensity(argv, version) {
     });
     const items = entries.map((e) => e.item);
     const counts = summarize(items);
-    const exit = counts.warn || counts.refuse || counts.fail ? 1 : 0;
+    // No JPEG to work on at all is a 1 too: the output folder is not what was asked for.
+    const exit = counts.warn || counts.refuse || counts.fail || !jobs.length ? 1 : 0;
     process.stdout.write(render(mode, items, counts, { version, dryRun: o.dryRun, exit }) + '\n');
     process.exitCode = exit;
   } catch (err) {
     process.stderr.write(`lithocinch density: could not complete: ${err.message}\n`);
     process.exitCode = 3;
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
   }
 }

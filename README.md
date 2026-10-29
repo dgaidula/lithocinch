@@ -214,42 +214,62 @@ lithocinch density ./exports --ppi 72 --dry-run --brief
 
 ### What gets written
 
-**JPEG** can hold a density in two places, and both are rewritten wherever they
-exist:
+**JPEG** can hold a density in three places, and each is rewritten wherever it
+exists:
 
 - the **JFIF** header: units set to pixels per inch, plus the horizontal and
   vertical density;
 - **EXIF**: `XResolution` and `YResolution` (stored as fractions, rewritten as
   *n*/1) and `ResolutionUnit` (set to inches, so a file saved in centimetres is
-  not left claiming 72 per centimetre).
+  not left claiming 72 per centimetre);
+- **Photoshop’s resolution resource** (APP13, resource `0x03ED`): a fixed
+  16-byte record, rewritten in place to *n* pixels per inch (the display units
+  Photoshop shows in its dialog are left as they were).
 
-A JPEG with neither (what sharp writes, so every file lithocinch itself has
-optimized) gets an 18-byte JFIF header inserted. That is done only when it
-cannot change how a decoder reads the colours: a file with an Adobe marker,
-with four components, or with components labelled R, G, B is refused instead.
+A JPEG with neither JFIF nor EXIF (what sharp writes, so every file lithocinch
+itself has optimized) gets an 18-byte JFIF header inserted. That is done only
+when it cannot change how a decoder reads the colours: a file with an Adobe
+marker, with four components, or with components labelled R, G, B is refused
+instead.
 
-Three more places can carry a resolution and are **not** rewritten: Photoshop’s
-own resolution resource, XMP `XResolution` fields, and the thumbnail’s EXIF.
-When a file has the first two, `lithocinch density` ends that file’s line with
-a warning (verdict `warn`, exit 1), because a program that reads those fields
-would still see the old number.
+Two more places can carry a resolution and are **not** rewritten: XMP
+`XResolution` fields and the thumbnail’s EXIF (IFD1, which readers ignore).
+XMP is a text packet whose length would change, so a file with an XMP
+resolution is written but reported: `lithocinch density` gives it the verdict
+`warn` (exit 1), and the main command warns and counts it as stale (see
+below). The warning names the value XMP still holds and who reads it, for
+example `XMP resolution fields (still 300 ppi; Apple ImageIO (Preview, Finder)
+reads XMP before JFIF)`. Apple ImageIO reads EXIF before XMP, so where an EXIF
+resolution exists (and was rewritten) Preview shows the new number; where only
+JFIF exists, it shows the XMP one.
 
 **PNG** stores a density in its `pHYs` chunk, in pixels per *metre*, so a whole
 number of inches is not exactly representable: 72 ppi is stored as 2835 and
 reads back as 72.01, 300 ppi as 11811 (299.9994). Programs round it, and
 ImageMagick reports the pixel-per-centimetre figure. An existing `pHYs` is
-replaced in place; a missing one is inserted (21 bytes).
+replaced in place; a missing one is inserted (21 bytes). A PNG that carries
+EXIF (an `eXIf` chunk, kept by `--keep-metadata`) has that EXIF’s resolution
+rewritten too, and the chunk’s checksum recomputed: libvips and Apple ImageIO
+read `eXIf` before `pHYs`.
 
 **WebP, AVIF, GIF and TIFF output are not supported.** WebP and AVIF can only
 hold a resolution inside an EXIF block, which sharp writes at 190 to 255 bytes
 and many tools ignore; GIF has no field for it; TIFF output is not wired up
 yet. Asking for them is refused up front (`--density 72 --format webp` is a
 usage error, exit 2, as is `--emit webp`). With `--format auto` the candidate
-pool is narrowed to JPEG and PNG. When the format is only known per file (the
+pool for still images is narrowed to JPEG and PNG; an animated input still
+goes through its own WebP-versus-GIF shootout, so it comes out as WebP or GIF
+without a density and is reported. When the format is only known per file (the
 default keeps each file’s own format, so a folder can hold a WebP), the file is
 still written, a warning names it, and the summary counts it under
 `density: not written`. An untouched original that cannot hold a density can
 still win an `auto` shootout; it is reported the same way.
+
+An untouched original that wins (the optimizer could not make it smaller) also
+keeps whatever XMP it had. Such a file gets its JFIF or EXIF density, but it is
+not counted as written: a warning names the file and the stale field, the
+summary line counts it as `written but an older value kept in another field`,
+and `--json` lists it under `density.staleFiles`.
 
 ### Metadata, and what the number costs
 
@@ -263,7 +283,8 @@ With `--keep-metadata`, EXIF that is kept has its resolution rewritten too.
 
 Skip-detection looks only at whether the output file exists, so after changing
 `--density` on a re-run, add `--overwrite` or the existing outputs are kept as
-they are.
+they are. The summary line says how many were skipped this way:
+`density   : 72 ppi written to 0, not written to 0, 14 skipped (density not checked)`.
 
 ### `lithocinch density`
 
@@ -277,20 +298,27 @@ It follows the directory command’s conventions: copies go to `-o` (default
 the extension (default `_lco`, though names keep their spaces here), an output
 that already exists is skipped unless `--overwrite`, and `--dry-run` reads and
 checks every file and writes nothing. To rewrite files where they are, name
-their own folder: `-o . --suffix "" --overwrite`.
+their own folder as the output:
+`lithocinch density ./exports --ppi 72 -o ./exports --suffix "" --overwrite`
+(see the known limits below for what a rewrite in place does to links).
 
-Each file is checked before anything is written. A file that is not a JPEG, has
-a damaged header, is cut off partway through the image (it is decoded once to
-find out), or cannot hold a density is **refused** and no output is made for
-it. Output is written to a temporary name beside the destination and then
-renamed, so a failed write never leaves a half-written file.
+A folder is scanned for `.jpg` and `.jpeg`; any other image in it (PNG, WebP,
+GIF, AVIF, TIFF) is listed as `skip not a JPEG`, so an output folder that is
+missing them is no surprise. Each file is checked before anything is written. A
+file that is not a JPEG, has a damaged header, is cut off partway through the
+image (it is decoded once to find out), or cannot hold a density is
+**refused** and no output is made for it. Output is written to a temporary name
+beside the destination and then renamed, so a failed write never leaves a
+half-written file, and an interrupted run (Ctrl-C, SIGTERM) removes the
+temporary files it was writing before it exits 130 or 143.
 
 Output has four shapes, all rendered from the same list of results (one per
 file): the default (a few lines per file, showing the header before and after),
 `--brief` (one line per file, `<verdict> <summary>  <name>`, then a summary
 line), `--json`, and `--quiet` (the summary line). Verdicts are `ok`, `warn`,
 `skip`, `refuse` and `fail`. Exit status: `0` all done or skipped, `1` any file
-refused, failed or warned about, `2` usage error, `3` the run could not complete.
+refused, failed or warned about, or no JPEG found to work on, `2` usage error,
+`3` the run could not complete.
 
 ```
 $ lithocinch density print-export.jpg --ppi 72 -o ready --brief
@@ -299,6 +327,40 @@ summary: ok=1 warn=0 skip=0 refuse=0 fail=0
 ```
 
 The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `readPngDensity` and `DensityError` (Buffer in, Buffer out) for the same job without the CLI; `optimizeImageBuffer` takes a `density` option and returns what happened in `result.density`.
+
+### Known limits
+
+- **XMP is not rewritten.** A file whose XMP states a resolution is written
+  with the new JFIF or EXIF value and reported (a `warn` in
+  `lithocinch density`, a stale count on the main command). Apple ImageIO (Preview, Finder)
+  reads XMP before JFIF, so a JPEG with JFIF and XMP but no EXIF still shows
+  the XMP number there. Whether to rewrite XMP or refuse such files is open.
+- **The thumbnail’s EXIF (IFD1) is not rewritten or reported.** ImageMagick
+  and Apple ImageIO both read IFD0.
+- **PNG density is per metre**, so 72 ppi reads back as 72.01 and 300 as
+  299.9994 (see above).
+- **Apple ImageIO ignores a JFIF-only density outside a middle range.**
+  Measured with `sips`: 1, 2, 9600, 32767 and 65535 ppi show as 72; 10 to
+  4800 read correctly. ImageMagick reads all of them.
+- **An inserted JFIF header can make an untouched original 18 bytes larger
+  than its source.** The never-inflate check runs before the density is
+  written, and a header was asked for, so the 18 bytes are kept.
+- **Skip-detection ignores `--density`.** Add `--overwrite` to change the
+  density of outputs that already exist; the summary counts the ones skipped.
+- **A file that fails to optimize** is copied to the output folder with its
+  original header (as without `--density`); it is counted under `errors`, not
+  on the density line.
+- **The transform service** (the `transform` CLI, `serve` and the Lambda sync
+  handler) accepts `defaults.density` but does not report whether a density
+  was written for each output.
+- **A rewrite in place replaces the file by renaming a new one over it.** A
+  symbolic link is replaced by a regular file (its target keeps the old
+  density), a hard link is broken (the other name keeps the old bytes),
+  extended attributes such as Finder tags are dropped, and a read-only file is
+  rewritten without comment.
+- **Only SIGINT and SIGTERM are cleaned up after.** A run killed with SIGKILL,
+  or by a power cut, can leave hidden `.<name>.<pid>.<hex>.tmp` files beside
+  its outputs; they are safe to delete.
 
 ## Transform service (CMS plugin / Lambda backbone)
 

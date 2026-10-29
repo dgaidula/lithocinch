@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -136,16 +136,73 @@ test('neither header, and JFIF could change the colours: refused', async () => {
   assert.throws(() => patchJpegDensity(rgbLabelled, 72), (e) => e instanceof DensityError && /R, G, B/.test(e.message));
 });
 
-test('density fields that are present but not rewritten are reported (Photoshop resource, XMP)', async () => {
-  // 8BIM resource 0x03ED (resolution info), empty name, 16 bytes of data.
-  const irb = Buffer.concat([Buffer.from('Photoshop 3.0\0', 'latin1'), Buffer.from('8BIM', 'latin1'), Buffer.from([0x03, 0xed, 0, 0, 0, 0, 0, 16]), Buffer.alloc(16)]);
-  const app13 = Buffer.concat([Buffer.from([0xff, 0xed, 0, 0]), irb]);
-  app13.writeUInt16BE(2 + irb.length, 2);
-  const xmpBody = Buffer.from('http://ns.adobe.com/xap/1.0/\0<tiff:XResolution>3000000/10000</tiff:XResolution>', 'latin1');
-  const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, 0, 0]), xmpBody]);
-  app1.writeUInt16BE(2 + xmpBody.length, 2);
-  const out = patchJpegDensity(splice(await bareJpeg(), jfif(), app13, app1), 72);
-  assert.deepEqual(out.unpatched, ['Photoshop resolution resource (APP13)', 'XMP resolution fields']);
+/** A JPEG segment: marker, length, payload. */
+const seg = (marker, payload) => {
+  const b = Buffer.alloc(4 + payload.length);
+  b[0] = 0xff;
+  b[1] = marker;
+  b.writeUInt16BE(2 + payload.length, 2);
+  payload.copy(b, 4);
+  return b;
+};
+
+/**
+ * A Photoshop APP13 whose 0x03ED ResolutionInfo (300 ppi, display units cm)
+ * follows another resource, so finding it depends on walking the 8BIM list
+ * (Pascal names padded to an even length, data padded to even).
+ */
+function app13({ ppi = 300, name = '' } = {}) {
+  const res = (id, nm, data) => {
+    const pascal = Buffer.concat([Buffer.from([nm.length]), Buffer.from(nm, 'latin1')]);
+    const padded = pascal.length % 2 ? Buffer.concat([pascal, Buffer.alloc(1)]) : pascal;
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(data.length);
+    const body = data.length % 2 ? Buffer.concat([data, Buffer.alloc(1)]) : data;
+    return Buffer.concat([Buffer.from('8BIM', 'latin1'), Buffer.from([id >> 8, id & 255]), padded, size, body]);
+  };
+  const ri = Buffer.alloc(16);
+  ri.writeUInt32BE(ppi * 65536, 0); ri.writeUInt16BE(1, 4); ri.writeUInt16BE(2, 6);
+  ri.writeUInt32BE(ppi * 65536, 8); ri.writeUInt16BE(1, 12); ri.writeUInt16BE(2, 14);
+  return seg(0xed, Buffer.concat([Buffer.from('Photoshop 3.0\0', 'latin1'), res(0x0404, '', Buffer.alloc(5, 7)), res(0x03ed, name, ri)]));
+}
+
+/** Read the 0x03ED record back by searching for it (independent of the code under test). */
+function readApp13(b) {
+  const at = b.indexOf(Buffer.from([0x38, 0x42, 0x49, 0x4d, 0x03, 0xed])); // "8BIM" 0x03ED
+  const nameLen = b[at + 6];
+  const data = at + 6 + 1 + nameLen + ((1 + nameLen) % 2) + 4;
+  return [b.readUInt32BE(data) / 65536, b.readUInt16BE(data + 4), b.readUInt16BE(data + 6), b.readUInt32BE(data + 8) / 65536, b.readUInt16BE(data + 12), b.readUInt16BE(data + 14)];
+}
+
+/** An XMP APP1 stating 300 ppi the way Photoshop writes it. */
+const xmp = (ppi = 300) =>
+  seg(0xe1, Buffer.from(`http://ns.adobe.com/xap/1.0/\0<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:XResolution="${ppi * 10000}/10000" tiff:YResolution="${ppi * 10000}/10000" tiff:ResolutionUnit="2"/></rdf:RDF></x:xmpmeta>`, 'latin1'));
+
+test('Photoshop resolution resource (APP13 0x03ED) is rewritten in place, after a walk of the 8BIM list', async () => {
+  for (const name of ['', 'x', 'ab']) {
+    const src = splice(await bareJpeg(), jfif(), app13({ name }));
+    assert.deepEqual(readApp13(src), [300, 1, 2, 300, 1, 2]);
+    const out = patchJpegDensity(src, 72);
+    assert.deepEqual(out.patched, ['JFIF', 'Photoshop'], `name "${name}"`);
+    assert.deepEqual(out.unpatched, []);
+    assert.equal(out.data.length, src.length);
+    assert.deepEqual(readApp13(out.data), [72, 1, 2, 72, 1, 2], `name "${name}": display units are kept`);
+  }
+  // APP13 alone: a JFIF header is inserted in front of it, and the record still lands.
+  const only = patchJpegDensity(splice(await bareJpeg(), app13()), 150);
+  assert.deepEqual(only.patched, ['JFIF (inserted)', 'Photoshop']);
+  assert.deepEqual(readApp13(only.data), [150, 1, 2, 150, 1, 2]);
+  assert.deepEqual(readJpegDensity(only.data).jfif, { units: 1, x: 150, y: 150 });
+});
+
+test('XMP resolution is reported, not rewritten, and the report names the value and who still reads it', async () => {
+  const xmpOnly = patchJpegDensity(splice(await bareJpeg(), xmp()), 72);
+  assert.equal(xmpOnly.unpatched.length, 1);
+  assert.match(xmpOnly.unpatched[0], /^XMP resolution fields \(still 300 ppi; Apple ImageIO \(Preview, Finder\) reads XMP before JFIF\)$/);
+  const withExif = patchJpegDensity(splice(await bareJpeg(), jfif(), exif(), xmp(240)), 72);
+  assert.match(withExif.unpatched[0], /still 240 ppi; programs that read XMP see it/);
+  const element = seg(0xe1, Buffer.from('http://ns.adobe.com/xap/1.0/\0<tiff:XResolution>3000000/10000</tiff:XResolution>', 'latin1'));
+  assert.match(patchJpegDensity(splice(await bareJpeg(), jfif(), element), 72).unpatched[0], /still 300 ppi/);
 });
 
 test('input that is not a JPEG is refused', async () => {
@@ -165,6 +222,52 @@ test('damaged JPEG headers are refused: truncated, overrunning segment, bad EXIF
   corruptCode(overrun);
   corruptCode(splice(await bareJpeg(), exif({ ifdOffset: 5000 }))); // IFD0 outside the block
   corruptCode(Buffer.concat([Buffer.from([0xff, 0xd8, 0x12, 0x34]), Buffer.alloc(20)])); // junk where a marker belongs
+});
+
+test('damaged headers are refused with a DensityError, never patched past their bounds or thrown as a RangeError', async () => {
+  const bare = await bareJpeg();
+  const refused = (b, re, label) =>
+    assert.throws(() => patchJpegDensity(b, 72), (e) => e instanceof DensityError && e.code === 'corrupt' && re.test(e.message), label);
+  // EXIF entries, offsets as built by exif(): IFD0 at 8, entry n at 10 + 12n,
+  // XResolution's value offset at 18, the rationals at 50.
+  const exifWith = (edit) => {
+    const e = exif();
+    edit(e.subarray(10)); // the TIFF block
+    return splice(bare, e);
+  };
+  refused(exifWith((t) => t.writeUInt32LE(5000, 18)), /points outside the block/, 'rational past the block');
+  refused(exifWith((t) => t.writeUInt16LE(400, 8)), /entry table runs past/, 'IFD0 count past the block');
+  refused(exifWith((t) => t.writeUInt32LE(4, 4)), /IFD0 offset is outside/, 'IFD0 inside the TIFF header');
+  refused(exifWith((t) => t.writeUInt32LE(2, 14)), /does not have exactly one value/, 'two XResolution values');
+  refused(exifWith((t) => t.writeUInt16LE(3, 12)), /is not a RATIONAL/, 'XResolution as a SHORT');
+  refused(exifWith((t) => t.writeUInt32LE(10, 18)), /points into the TIFF header or IFD0/, 'rational inside its own entry');
+  refused(exifWith((t) => t.writeUInt32LE(0, 18)), /points into the TIFF header or IFD0/, 'rational on the TIFF header');
+  // An EXIF segment that claims more bytes than the file holds.
+  const cut = splice(bare, exif());
+  refused(cut.subarray(0, 2 + 10 + 8), /runs past the end of the file/, 'EXIF cut after its TIFF header');
+  // A short JFIF segment (7 bytes, no fixed fields) is not patched into the next segment.
+  refused(splice(bare, Buffer.from([0xff, 0xe0, 0, 7, 0x4a, 0x46, 0x49, 0x46, 0]), exif()), /JFIF segment is shorter/, 'short JFIF');
+  // Lengths 0 and 1 are impossible; EOI before any scan is not an image.
+  refused(splice(bare, Buffer.from([0xff, 0xe2, 0, 0])), /impossible length \(0\)/, 'length 0');
+  refused(splice(bare, Buffer.from([0xff, 0xe2, 0, 1])), /impossible length \(1\)/, 'length 1');
+  refused(splice(bare, jfif(), Buffer.from([0xff, 0xd9])), /end-of-image marker before any image data/, 'EOI first');
+});
+
+test('only the first JFIF segment is rewritten', async () => {
+  const src = splice(await bareJpeg(), jfif({ x: 300, y: 300 }), jfif({ x: 200, y: 200 }));
+  const out = patchJpegDensity(src, 72).data;
+  // Read both segments at their fixed offsets: Xdensity at 2 + 12, then 18 bytes on.
+  assert.deepEqual([out[13], out.readUInt16BE(14), out.readUInt16BE(16)], [1, 72, 72]);
+  assert.ok(out.subarray(20, 38).equals(src.subarray(20, 38)), 'the second JFIF segment is untouched');
+});
+
+test('JFIF is not inserted where the colour model cannot be checked: four components, or no frame header', () => {
+  const sof4 = seg(0xc0, Buffer.from([8, 0, 8, 0, 8, 4, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0]));
+  const sos = seg(0xda, Buffer.from([1, 1, 0, 0, 63, 0]));
+  const eoi = Buffer.from([0, 0xff, 0xd9]);
+  const soi = Buffer.from([0xff, 0xd8]);
+  assert.throws(() => patchJpegDensity(Buffer.concat([soi, sof4, sos, eoi]), 72), (e) => e.code === 'unsupported' && /4 colour components/.test(e.message));
+  assert.throws(() => patchJpegDensity(Buffer.concat([soi, sos, eoi]), 72), (e) => e.code === 'unsupported' && /no frame header/.test(e.message));
 });
 
 // ---- pixel identity ---------------------------------------------------------
@@ -254,6 +357,41 @@ test('PNG: a non-PNG and a truncated PNG are refused', async () => {
   const jpeg = await bareJpeg();
   assert.throws(() => patchPngDensity(jpeg, 72), (e) => e.code === 'not-png');
   assert.throws(() => patchPngDensity(png.subarray(0, png.length - 5), 72), (e) => e instanceof DensityError && e.code === 'corrupt');
+  // A pHYs chunk that is not 9 bytes is refused, not overwritten with 21 bytes.
+  const phys = pngChunks(png).find((c) => c.type === 'pHYs');
+  const short = Buffer.concat([png.subarray(0, phys.at), Buffer.from([0, 0, 0, 8]), png.subarray(phys.at + 4, phys.at + 16), Buffer.alloc(4), png.subarray(phys.at + 21)]);
+  assert.throws(() => patchPngDensity(short, 72), (e) => e instanceof DensityError && /pHYs chunk is not 9 bytes/.test(e.message));
+});
+
+/** IFD0 XResolution, YResolution and ResolutionUnit of a bare TIFF block, read by hand. */
+function tiffResolution(t) {
+  const le = t.toString('latin1', 0, 2) === 'II';
+  const u16 = (o) => (le ? t.readUInt16LE(o) : t.readUInt16BE(o));
+  const u32 = (o) => (le ? t.readUInt32LE(o) : t.readUInt32BE(o));
+  const ifd = u32(4);
+  const out = {};
+  for (let e = 0; e < u16(ifd); e++) {
+    const at = ifd + 2 + 12 * e;
+    const tag = u16(at);
+    if (tag === 0x011a || tag === 0x011b) out[tag === 0x011a ? 'x' : 'y'] = [u32(u32(at + 8)), u32(u32(at + 8) + 4)];
+    if (tag === 0x0128) out.unit = u16(at + 8);
+  }
+  return out;
+}
+const pngExif = (b) => pngChunks(b).filter((c) => c.type === 'eXIf').map((c) => tiffResolution(b.subarray(c.at + 8, c.at + 8 + c.len)));
+
+test('PNG: an eXIf chunk has its resolution rewritten too, with a fresh CRC', async () => {
+  const png = await (await noisy(40, 30)).withDensity(300).png().toBuffer();
+  const before = pngExif(png);
+  assert.equal(before.length, 1, 'sharp withDensity writes an eXIf chunk');
+  assert.equal(before[0].x[0] / before[0].x[1], 300);
+  const out = patchPngDensity(png, 72);
+  assert.deepEqual(out.patched, ['pHYs', 'eXIf']);
+  assert.deepEqual(pngExif(out.data), [{ x: [72, 1], y: [72, 1], unit: 2 }]);
+  assertPngCrcs(out.data, 'eXIf');
+  assert.equal(out.data.length, png.length);
+  assert.equal(Math.round((await sharp(out.data, { failOn: 'error' }).metadata()).density), 72);
+  assert.ok((await rgba(out.data)).equals(await rgba(png)));
 });
 
 // ---- config -----------------------------------------------------------------
@@ -261,7 +399,7 @@ test('PNG: a non-PNG and a truncated PNG are refused', async () => {
 test('config: density is off by default, and validated as a whole number of ppi', () => {
   assert.equal(resolveConfig().density, null);
   assert.equal(resolveConfig({ density: '300' }).density, 300);
-  for (const bad of ['72.5', '0', '-1', 'abc', '65536', '', NaN]) {
+  for (const bad of ['72.5', '0', '-1', 'abc', '65536', '', NaN, '0x48', '1e2', '72.0', ' 72', '+72', '072', 0, -1, 72.5, 65536]) {
     assert.throws(() => resolveConfig({ density: bad }), /Invalid --density/, String(bad));
   }
   assert.equal(parsePpi(65535), 65535);
@@ -340,6 +478,70 @@ test('processDirectory --density: stats count what carries it and name what cann
   }
 });
 
+/** Run processDirectory over files written into a fresh temp folder; returns stats, warnings, events and the output path. */
+async function processFiles(files, options) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'lco-density-'));
+  const input = path.join(dir, 'in');
+  await fs.mkdir(input);
+  for (const [name, bytes] of Object.entries(files)) await fs.writeFile(path.join(input, name), bytes);
+  const warnings = [];
+  const events = [];
+  const output = path.join(dir, 'out');
+  const stats = await processDirectory(
+    { input, output, errorDir: path.join(dir, 'err'), maxSize: 0, ...options },
+    { logger: { info() {}, warn: (m) => warnings.push(m), error() {} }, onProgress: (e) => events.push(e) }
+  );
+  return { dir, output, stats, warnings, events };
+}
+
+/** A JPEG carrying an XMP 300 ppi; under --format auto the untouched original wins (passthrough). */
+const xmpJpeg = async () => splice(await bareJpeg(), xmp());
+
+test('processDirectory --density --keep-metadata --format png: the kept eXIf says the new density too', async () => {
+  const src = await (await noisy()).withMetadata({ density: 300 }).jpeg().toBuffer();
+  const r = await processFiles({ 'a.jpg': src }, { keepMetadata: true, format: 'png', pngEngine: 'sharp', density: 72 });
+  try {
+    const out = await fs.readFile(path.join(r.output, 'a_lco.png'));
+    const exifs = pngExif(out);
+    assert.equal(exifs.length, 1, 'the kept EXIF is an eXIf chunk');
+    assert.deepEqual(exifs[0], { x: [72, 1], y: [72, 1], unit: 2 });
+    assertPngCrcs(out, 'kept eXIf');
+    assert.equal(Math.round(readPngDensity(out).x), 72);
+    assert.equal(r.stats.density.applied, 1);
+  } finally {
+    await fs.rm(r.dir, { recursive: true, force: true });
+  }
+});
+
+test('processDirectory --density: a passed-through original that keeps an old XMP value is warned about and counted as stale, not written', async () => {
+  const r = await processFiles({ 'x.jpg': await xmpJpeg() }, { format: 'auto', density: 72 });
+  try {
+    assert.equal(r.events.find((e) => e.type === 'done').engine, 'passthrough', 'the fixture must be passed through');
+    assert.equal(r.stats.density.applied, 0);
+    assert.equal(r.stats.density.stale, 1);
+    assert.deepEqual(r.stats.density.staleFiles, [{ file: 'x.jpg', output: 'x_lco.jpg', fields: ['XMP resolution fields (still 300 ppi; Apple ImageIO (Preview, Finder) reads XMP before JFIF)'] }]);
+    assert.equal(r.warnings.length, 1);
+    assert.match(r.warnings[0], /^x\.jpg: density written, but not rewritten in: XMP resolution fields \(still 300 ppi/);
+  } finally {
+    await fs.rm(r.dir, { recursive: true, force: true });
+  }
+});
+
+test('processDirectory --density --emit: every sibling is counted, and outputs skipped on a re-run are counted as unchecked', async () => {
+  const files = { 'a.jpg': await bareJpeg() };
+  const r = await processFiles(files, { density: 72, emit: ['png'] });
+  try {
+    assert.equal(r.stats.density.applied, 2, 'the JPEG and its PNG sibling');
+    assert.equal(r.stats.emitted, 1);
+    assert.equal(Math.round(readPngDensity(await fs.readFile(path.join(r.output, 'a_lco.png'))).x), 72);
+    const again = await processDirectory({ input: path.join(r.dir, 'in'), output: r.output, errorDir: path.join(r.dir, 'err'), maxSize: 0, density: 150, emit: ['png'] });
+    assert.equal(again.density.applied, 0);
+    assert.equal(again.density.skipped, 2);
+  } finally {
+    await fs.rm(r.dir, { recursive: true, force: true });
+  }
+});
+
 // ---- the CLI ----------------------------------------------------------------
 
 test('lithocinch --density with a bad value or a format that cannot hold it is a usage error (exit 2)', () => {
@@ -359,6 +561,29 @@ async function withDir(fn) {
     await fs.rm(dir, { recursive: true, force: true });
   }
 }
+
+const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+test('lithocinch --density: the summary line counts written, stale, and skipped-unchecked outputs', async () => {
+  await withDir(async (dir) => {
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    await fs.writeFile(path.join(input, 'a.jpg'), await bareJpeg());
+    await fs.writeFile(path.join(input, 'x.jpg'), await xmpJpeg());
+    const to = (o) => [input, '-o', path.join(dir, o), '--error-dir', path.join(dir, 'err'), '--max-size', '0', '-q'];
+    // --format auto passes x.jpg through with its XMP: written, but stale.
+    const auto = run(...to('auto'), '--format', 'auto', '--density', '72');
+    assert.equal(auto.status, 0, auto.stderr);
+    assert.match(plain(auto.stderr), /^ {2}density {3}: 72 ppi written to 1, not written to 0, 1 written but an older value kept in another field$/m);
+    const json = JSON.parse(run(...to('auto'), '--format', 'auto', '--density', '72', '--json').stdout);
+    assert.deepEqual(json.density.staleFiles.map((f) => f.file), ['x.jpg']);
+    // A re-run with another density skips the outputs that exist, and says so.
+    const first = run(...to('keep'), '--density', '72');
+    assert.match(plain(first.stderr), /^ {2}density {3}: 72 ppi written to 2, not written to 0$/m);
+    const again = run(...to('keep'), '--density', '150');
+    assert.match(plain(again.stderr), /^ {2}density {3}: 150 ppi written to 0, not written to 0, 2 skipped \(density not checked\)$/m);
+  });
+});
 
 test('density sub-command: writes patched copies to the output folder, leaves the source alone, skips an existing output', async () => {
   await withDir(async (dir) => {
@@ -466,4 +691,116 @@ test('density sub-command: usage errors exit 2 with a one-line message and nothi
   const help = run('density', '--help');
   assert.equal(help.status, 0);
   assert.match(help.stdout, /^Usage: lithocinch density/);
+});
+
+test('density sub-command: a file with XMP left stale is written but is a warn, and the run exits 1', async () => {
+  await withDir(async (dir) => {
+    await fs.writeFile(path.join(dir, 'x.jpg'), splice(await bareJpeg(), xmp()));
+    await fs.writeFile(path.join(dir, 'p.jpg'), splice(await bareJpeg(), jfif(), app13()));
+    const out = path.join(dir, 'out');
+    const r = run('density', path.join(dir, 'x.jpg'), path.join(dir, 'p.jpg'), '--ppi', '72', '-o', out, '--brief');
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^warn set 72 ppi \(JFIF \(inserted\), \+18 bytes\) {2}x\.jpg {2}\(also present and not rewritten: XMP resolution fields \(still 300 ppi; Apple ImageIO \(Preview, Finder\) reads XMP before JFIF\)\)$/m);
+    assert.match(r.stdout, /^ok set 72 ppi \(JFIF, Photoshop\) {2}p\.jpg$/m);
+    assert.match(r.stdout, /summary: ok=1 warn=1 skip=0 refuse=0 fail=0/);
+    assert.deepEqual(readApp13(await fs.readFile(path.join(out, 'p_lco.jpg'))), [72, 1, 2, 72, 1, 2]);
+    await fs.access(path.join(out, 'x_lco.jpg'));
+  });
+});
+
+test('density sub-command: two inputs that would write the same output are refused, not overwritten', async () => {
+  await withDir(async (dir) => {
+    for (const d of ['a', 'b']) {
+      await fs.mkdir(path.join(dir, d));
+      await fs.writeFile(path.join(dir, d, 'same.jpg'), await bareJpeg());
+    }
+    const r = run('density', path.join(dir, 'a/same.jpg'), path.join(dir, 'b/same.jpg'), '--ppi', '72', '-o', path.join(dir, 'out'), '--brief');
+    assert.equal(r.status, 1);
+    assert.match(r.stdout, /^ok set 72 ppi .* {2}same\.jpg$/m);
+    assert.match(r.stdout, /^refuse output collides {2}same\.jpg {2}\(would write the same output as .*a\/same\.jpg/m);
+  });
+});
+
+test('density sub-command: an output folder inside the input folder is not read as input; other images are listed as skipped', async () => {
+  await withDir(async (dir) => {
+    const input = path.join(dir, 'in');
+    await fs.mkdir(path.join(input, 'done'), { recursive: true });
+    await fs.writeFile(path.join(input, 'a.jpg'), await bareJpeg());
+    await fs.writeFile(path.join(input, 'done', 'old_lco.jpg'), await bareJpeg());
+    await fs.writeFile(path.join(input, 'b.png'), await (await noisy(8, 8)).png().toBuffer());
+    const r = run('density', input, '--ppi', '72', '-o', path.join(input, 'done'), '--json');
+    assert.equal(r.status, 0, r.stdout);
+    const items = JSON.parse(r.stdout).items.map((it) => `${it.verdict} ${it.summary} ${it.name}`);
+    assert.deepEqual(items, ['ok set 72 ppi (JFIF (inserted), +18 bytes) a.jpg', 'skip not a JPEG b.png']);
+  });
+});
+
+test('density sub-command: a folder with no JPEG lists what it skipped and exits 1', async () => {
+  await withDir(async (dir) => {
+    await fs.writeFile(path.join(dir, 'a.png'), await (await noisy(8, 8)).png().toBuffer());
+    const r = run('density', dir, '--ppi', '72', '-o', path.join(dir, 'out'), '--brief');
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.stdout, /^skip no JPEG files {2}/m);
+    assert.match(r.stdout, /^skip not a JPEG {2}a\.png {2}\(lithocinch density rewrites JPEGs only\)$/m);
+  });
+});
+
+test('density sub-command: the output keeps the source file mode, and replaces the file by rename (another hard link keeps the old bytes)', async () => {
+  await withDir(async (dir) => {
+    const file = path.join(dir, 'a.jpg');
+    const src = splice(await bareJpeg(), jfif());
+    await fs.writeFile(file, src);
+    await fs.chmod(file, 0o640);
+    const r = run('density', file, '--ppi', '72', '-o', path.join(dir, 'out'), '--brief');
+    assert.equal(r.status, 0, r.stdout);
+    assert.equal((await fs.stat(path.join(dir, 'out', 'a_lco.jpg'))).mode & 0o777, 0o640);
+    // In place: a write into the file would change every link to it; a rename does not.
+    await fs.link(file, path.join(dir, 'link.jpg'));
+    const inPlace = run('density', file, '--ppi', '72', '-o', dir, '--suffix', '', '--overwrite', '--brief');
+    assert.equal(inPlace.status, 0, inPlace.stdout);
+    assert.deepEqual(readJpegDensity(await fs.readFile(file)).jfif, { units: 1, x: 72, y: 72 });
+    assert.ok((await fs.readFile(path.join(dir, 'link.jpg'))).equals(src), 'the old inode was not written into');
+  });
+});
+
+test('density sub-command: an unexpected error (not a bad file) ends the run with exit 3 and its own message', async () => {
+  await withDir(async (dir) => {
+    // Fault injection from outside the code under test: a JPEG of exactly
+    // 77777 bytes makes Buffer#readUInt16BE throw a plain Error.
+    const jpeg = splice(await bareJpeg(), jfif());
+    const file = path.join(dir, 'a.jpg');
+    await fs.writeFile(file, Buffer.concat([jpeg, Buffer.alloc(77777 - jpeg.length)]));
+    const fault = 'data:text/javascript,' + encodeURIComponent(
+      'const r = Buffer.prototype.readUInt16BE; Buffer.prototype.readUInt16BE = function (o) { if (this.length === 77777) throw new Error("injected fault"); return r.call(this, o); };'
+    );
+    const r = spawnSync(process.execPath, ['--import', fault, CLI, 'density', file, '--ppi', '72', '-o', path.join(dir, 'out'), '--brief'], { encoding: 'utf8', input: '' });
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /^lithocinch density: could not complete: injected fault$/m);
+  });
+});
+
+test('density sub-command: SIGINT mid-run removes the temporary files in flight and exits 130', async () => {
+  await withDir(async (dir) => {
+    // Small images with large trailing data (after EOI): cheap to decode, slow
+    // enough to write that a batch of eight is still writing when the first lands.
+    const jpeg = splice(await bareJpeg(), jfif());
+    const body = Buffer.concat([jpeg, Buffer.alloc(6 * 1024 * 1024, 0x5a)]);
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    for (let k = 0; k < 24; k++) await fs.writeFile(path.join(input, `f${String(k).padStart(2, '0')}.jpg`), body);
+    const out = path.join(dir, 'out');
+    const child = spawn(process.execPath, [CLI, 'density', input, '--ppi', '72', '-o', out, '-q'], { stdio: 'ignore' });
+    const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    for (let waited = 0; waited < 20000; waited += 2) {
+      const names = await fs.readdir(out).catch(() => []);
+      if (names.some((n) => n.endsWith('.tmp') || n.endsWith('_lco.jpg'))) break;
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    child.kill('SIGINT');
+    const { code, signal } = await exited;
+    assert.deepEqual({ code, signal }, { code: 130, signal: null });
+    const left = (await fs.readdir(out).catch(() => [])).filter((n) => n.endsWith('.tmp'));
+    assert.deepEqual(left, [], 'no temporary file is left behind');
+  });
 });

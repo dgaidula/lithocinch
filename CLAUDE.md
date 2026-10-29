@@ -17,13 +17,13 @@ guessing. Content-aware: picks lossy vs lossless and the best format per image.
 - `src/best-format.js` — `--format auto` (pick smallest format; JPEG pruned if below bar; tie-break = most compatible; AVIF in pool).
 - `src/transform-api.js` / `src/server.js` / `src/cli-service.js` — the transform service (one-shot CLI, HTTP daemon); `lambda/transform.js` is the same handler.
 - `src/process-dir.js` — directory orchestrator (glob, concurrency, skip, `--emit`, `--manifest`).
-- `src/density.js` — resolution headers (JPEG JFIF/EXIF, PNG pHYs) rewritten without re-encoding; `src/density-cli.js` is the `lithocinch density` sub-command.
+- `src/density.js` — resolution headers (JPEG JFIF/EXIF/Photoshop APP13, PNG pHYs/eXIf) rewritten without re-encoding; `src/density-cli.js` is the `lithocinch density` sub-command.
 - `src/config.js` — all defaults + `resolveConfig` (single source of truth).
 - `lambda/` — `transform.js` (sync API / remote driver), `handler.js` (S3 batch), `Dockerfile` + `template.yaml` (SAM deploy).
 
 ## Commands
 ```bash
-node --test                         # 106 tests (node:test); 1 env-skip
+node --test                         # 122 tests (node:test); 1 env-skip
 node src/cli.js <dir> --verbose     # directory optimize
 node src/cli.js transform           # one-shot: JSON request on stdin -> JSON out
 node src/cli.js serve --port 4111   # HTTP daemon (warm sharp)

@@ -183,12 +183,13 @@ export const MAX_PPI = 65535;
 /**
  * Validate a resolution in pixels per inch: a whole number from 1 to 65535.
  * Shared by the `--density` option and the `density` sub-command's `--ppi`.
+ * A string must be plain decimal digits ("72", not "0x48", "1e2" or "72.0").
  * @param {unknown} value
  * @param {string} [flag]  name used in the error message
  * @returns {number}
  */
 export function parsePpi(value, flag = '--density') {
-  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  const n = typeof value === 'string' && /^[1-9][0-9]*$/.test(value) ? Number(value) : value;
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > MAX_PPI) {
     throw new Error(`Invalid ${flag} "${value}". Expected a whole number of pixels per inch, 1-${MAX_PPI}`);
   }

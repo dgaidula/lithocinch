@@ -76,10 +76,20 @@ export async function processDirectory(options = {}, hooks = {}) {
     bytesOut: 0,
     errorFiles: [],
   };
-  // --density: how many outputs carry it, and which could not (reason per file).
-  if (cfg.density != null) stats.density = { ppi: cfg.density, applied: 0, notApplied: 0, notAppliedFiles: [] };
+  // --density: how many outputs carry it, which could not (reason per file),
+  // which carry it but also keep an older value in a field that was not
+  // rewritten (stale), and how many existing outputs were skipped unchecked.
+  if (cfg.density != null) {
+    stats.density = { ppi: cfg.density, applied: 0, notApplied: 0, notAppliedFiles: [], stale: 0, staleFiles: [], skipped: 0 };
+  }
   const noteDensity = (rel, outRel, d) => {
     if (!stats.density || !d) return; // not asked for, or an SVG (no raster density to write)
+    if (d.applied && d.unpatched?.length) {
+      stats.density.stale++;
+      stats.density.staleFiles.push({ file: rel, output: outRel, fields: d.unpatched });
+      log.warn(`${rel}: density written, but not rewritten in: ${d.unpatched.join('; ')}`);
+      return;
+    }
     if (d.applied) return void stats.density.applied++;
     stats.density.notApplied++;
     stats.density.notAppliedFiles.push({ file: rel, output: outRel, reason: d.reason });
@@ -150,6 +160,7 @@ export async function processDirectory(options = {}, hooks = {}) {
     const primaryNeeded = cfg.overwrite || !primaryExists;
     if (!primaryNeeded) {
       stats.skipped++;
+      if (stats.density) stats.density.skipped++; // its density was not checked
       if (prior) manifestEntries.push(prior); // carry the prior entry forward
       onProgress({ type: 'skip', file: job.rel });
     } else {
@@ -206,7 +217,10 @@ export async function processDirectory(options = {}, hooks = {}) {
         });
         const sibRel = cfg.flatten ? path.basename(sibName) : sibName;
         const sibDest = path.join(outputRoot, sibRel);
-        if (!cfg.overwrite && (await exists(sibDest))) continue; // already emitted
+        if (!cfg.overwrite && (await exists(sibDest))) {
+          if (stats.density) stats.density.skipped++;
+          continue; // already emitted
+        }
         try {
           await getBytes();
           const sib = await optimizeBytes(bytes, job.rel, { ...cfg, format: fmt });

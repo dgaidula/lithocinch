@@ -349,7 +349,10 @@ program.action(async (input, opts) => {
       `  copied    : ${stats.copied}\n` +
       (stats.emitted ? `  emitted   : ${stats.emitted} extra (${fmtBytes(stats.emittedBytes)})\n` : '') +
       (stats.density
-        ? `  density   : ${stats.density.ppi} ppi written to ${stats.density.applied}, not written to ${stats.density.notApplied ? pc.yellow(stats.density.notApplied) : 0}\n`
+        ? `  density   : ${stats.density.ppi} ppi written to ${stats.density.applied}, not written to ${stats.density.notApplied ? pc.yellow(stats.density.notApplied) : 0}` +
+          (stats.density.stale ? `, ${pc.yellow(stats.density.stale)} written but an older value kept in another field` : '') +
+          (stats.density.skipped ? `, ${pc.yellow(stats.density.skipped)} skipped (density not checked)` : '') +
+          '\n'
         : '') +
       `  size      : ${fmtBytes(stats.bytesIn)} -> ${fmtBytes(stats.bytesOut)} ` +
       `(${pc.green(`-${pct}%`)}, saved ${fmtBytes(saved)})\n` +

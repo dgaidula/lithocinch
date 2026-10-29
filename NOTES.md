@@ -267,8 +267,8 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 | — (new) | — | `--format-pool` / `--format-tolerance` | `formatPool` / `formatTolerance` | `auto` candidate set (default `avif,webp,jpeg,png`) + compatibility tie-break tolerance (3%) |
 | — (new) | — | `--manifest` | `manifest` | JSON map of source → output(s); required for `auto` skip-detection (extensions change) |
 | — (new) | — | `--keep-metadata` | `keepMetadata` | re-embed sRGB ICC + EXIF |
-| — (new) | — | `--density <ppi>` | `density` | after encoding, rewrite the output's resolution header to this many pixels per inch (whole number 1–65535). JPEG: JFIF + any EXIF resolution (an 18-byte JFIF header is inserted if neither exists); PNG: `pHYs`. WebP/AVIF/GIF/TIFF are refused (`--format`, `--emit`) or reported per file; `--format auto` narrows its pool to jpeg/png. No ICC/EXIF is added. Skip-detection ignores it: re-run with `--overwrite` after changing it |
-| — (new) | — | `lithocinch density <files> --ppi <n>` | — | sub-command: header-only rewrite of existing JPEGs, no re-encode. Takes `-o/--output`, `-s/--suffix`, `--overwrite`, `--dry-run`, `--brief`, `--json`, `-q/--quiet`; exit 0/1/2/3 (see README) |
+| — (new) | — | `--density <ppi>` | `density` | after encoding, rewrite the output’s resolution header to this many pixels per inch (plain decimal digits, 1–65535). JPEG: JFIF + any EXIF resolution + any Photoshop resolution resource (an 18-byte JFIF header is inserted if there is no JFIF or EXIF); PNG: `pHYs` + any `eXIf`. WebP/AVIF/GIF/TIFF are refused (`--format`, `--emit`) or reported per file; `--format auto` narrows its still-image pool to jpeg/png. No ICC/EXIF is added. An output that keeps a stale XMP value is warned about and counted as stale (`density.staleFiles` in `--json`). Skip-detection ignores it: re-run with `--overwrite` after changing it (the summary counts the outputs skipped unchecked) |
+| — (new) | — | `lithocinch density <files> --ppi <n>` | — | sub-command: header-only rewrite of existing JPEGs, no re-encode. Takes `-o/--output`, `-s/--suffix`, `--overwrite`, `--dry-run`, `--brief`, `--json`, `-q/--quiet`; other images in a folder are listed as `skip not a JPEG`; XMP left stale is a `warn`; exit 0/1/2/3 (1 also when no JPEG is found; see README) |
 | — (new) | — | `--flatten` | `flatten` | write output flat instead of mirroring subfolders |
 | — (new) | — | `--emit` | `emit` | also write sibling formats (e.g. `webp,avif`) beside each raster for `<picture>` fallbacks |
 | — (new) | — | `--dry-run` | `dryRun` | plan only, write nothing |
@@ -304,7 +304,8 @@ option (CLI flag + library option key). Defaults match 2.9 unless noted.
 ## 4. Still TODO / possible follow-ups
 
 - `--concurrency` autoscaling to CPU count.
-- `--density` for WebP/AVIF (needs an EXIF block, ~210–255 bytes, and is ignored by many tools) and for TIFF output (sharp's `withDensity` writes the TIFF resolution tags at no cost; not wired up).
+- `--density`: rewrite XMP resolution fields, or refuse files that carry them (open decision); report the density outcome from the transform service.
+- `--density` for WebP/AVIF (needs an EXIF block, ~210–255 bytes, and is ignored by many tools) and for TIFF output (sharp’s `withDensity` writes the TIFF resolution tags at no cost; not wired up).
 - Optional WebP/AVIF "also emit" mode (write `foo.jpg` **and** `foo.webp`).
 - A `--config <file>` loader so you can save preset profiles.
 - SAM/CDK template + `Dockerfile` for the Lambda packaging path.
