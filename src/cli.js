@@ -86,6 +86,7 @@ program
   // --- color / metadata ---
   .option('--keep-metadata', 're-embed sRGB ICC profile + EXIF instead of stripping', false)
   .option('--density <ppi>', 'write this resolution (pixels per inch) into JPEG and PNG output headers; other formats are refused or reported')
+  .option('--allow-stale-xmp', 'with --density: write a JPEG whose XMP resolution cannot be rewritten in place (with a warning) instead of refusing it', false)
   // --- format / quality ---
   .addOption(
     new Option('-f, --format <fmt>', 'output format; "auto" picks the smallest per image').choices([
@@ -201,6 +202,7 @@ program.action(async (input, opts) => {
     trim: opts.trim,
     keepMetadata: opts.keepMetadata,
     density: opts.density ?? null, // validated by resolveConfig (src/config.js)
+    allowStaleXmp: opts.allowStaleXmp,
     format: opts.format ?? null,
     formatPool: opts.formatPool ? opts.formatPool.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
     formatTolerance: Number(opts.formatTolerance),
@@ -251,6 +253,7 @@ program.action(async (input, opts) => {
 
   // A bad --density (not a whole number, or a format that cannot hold it) is a
   // usage error, like a bad --format choice, not a failed run.
+  if (opts.allowStaleXmp && opts.density == null) program.error('error: --allow-stale-xmp needs --density', { exitCode: 2 });
   if (opts.density != null) {
     try {
       resolveConfig(options);

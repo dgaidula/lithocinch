@@ -217,6 +217,8 @@ async function optimizeAnimated(input, meta, cfg, format, resized, pipeline) {
  * (density.js) and the result carries `density`: `{ applied, ppi, patched,
  * unpatched }`, or `{ applied: false, ppi, reason }` when the chosen output
  * can't hold one (WebP, AVIF, GIF, TIFF). The data is then left as encoded.
+ * A JPEG whose XMP resolution can't be rewritten in place throws a
+ * DensityError (code 'stale-xmp') unless `allowStaleXmp` is set.
  *
  * @param {Buffer|Uint8Array} input  encoded image bytes
  * @param {Partial<import('./config.js').DEFAULTS>} [options]
@@ -226,7 +228,7 @@ export async function optimizeImageBuffer(input, options = {}) {
   const cfg = options.__resolved ? options : resolveConfig(options);
   const result = await optimizeRaster(input, { ...cfg, __resolved: true });
   if (cfg.density == null) return result;
-  const { data, ...density } = applyDensity(result.data, result.outputFormat, cfg.density);
+  const { data, ...density } = applyDensity(result.data, result.outputFormat, cfg.density, { allowStaleXmp: cfg.allowStaleXmp });
   return {
     ...result,
     data,

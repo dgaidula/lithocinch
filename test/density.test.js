@@ -195,14 +195,145 @@ test('Photoshop resolution resource (APP13 0x03ED) is rewritten in place, after 
   assert.deepEqual(readJpegDensity(only.data).jfif, { units: 1, x: 150, y: 150 });
 });
 
-test('XMP resolution is reported, not rewritten, and the report names the value and who still reads it', async () => {
-  const xmpOnly = patchJpegDensity(splice(await bareJpeg(), xmp()), 72);
+test('XMP that cannot be rewritten in place (no padding) is refused; with allowStaleXmp it is reported with its value and who still reads it', async () => {
+  const noPadding = splice(await bareJpeg(), xmp());
+  assert.throws(() => patchJpegDensity(noPadding, 72), (e) => e instanceof DensityError && e.code === 'stale-xmp' && /still 300 ppi\): no packet padding/.test(e.message));
+  const stale = { allowStaleXmp: true };
+  const xmpOnly = patchJpegDensity(splice(await bareJpeg(), xmp()), 72, stale);
   assert.equal(xmpOnly.unpatched.length, 1);
   assert.match(xmpOnly.unpatched[0], /^XMP resolution fields \(still 300 ppi; Apple ImageIO \(Preview, Finder\) reads XMP before JFIF\)$/);
-  const withExif = patchJpegDensity(splice(await bareJpeg(), jfif(), exif(), xmp(240)), 72);
+  const withExif = patchJpegDensity(splice(await bareJpeg(), jfif(), exif(), xmp(240)), 72, stale);
   assert.match(withExif.unpatched[0], /still 240 ppi; programs that read XMP see it/);
   const element = seg(0xe1, Buffer.from('http://ns.adobe.com/xap/1.0/\0<tiff:XResolution>3000000/10000</tiff:XResolution>', 'latin1'));
-  assert.match(patchJpegDensity(splice(await bareJpeg(), jfif(), element), 72).unpatched[0], /still 300 ppi/);
+  assert.match(patchJpegDensity(splice(await bareJpeg(), jfif(), element), 72, stale).unpatched[0], /still 300 ppi/);
+});
+
+// ---- XMP rewritten in place ---------------------------------------------------
+
+const XMP_HEAD = 'http://ns.adobe.com/xap/1.0/\0';
+
+/**
+ * A Photoshop-style XMP APP1: the <?xpacket?> wrapper, the given attributes
+ * and elements on one rdf:Description, then `pad` bytes of trailing padding.
+ */
+const xmpPacket = ({ attrs = '', elements = '', pad = 2048 } = {}) =>
+  seg(0xe1, Buffer.from(
+    XMP_HEAD +
+      `<?xpacket begin="${String.fromCharCode(0xef, 0xbb, 0xbf)}" id="W5M0MpCehiHzreSzNTczkc9d"?>\n` +
+      '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+      `<rdf:Description rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" xmlns:exif="http://ns.adobe.com/exif/1.0/"${attrs}>${elements}</rdf:Description>` +
+      `</rdf:RDF></x:xmpmeta>\n${' '.repeat(pad)}\n<?xpacket end="w"?>`,
+    'latin1'
+  ));
+
+/** The XMP packet of a JPEG, found by plain search (independent of the code under test). */
+function xmpBack(b) {
+  const head = b.indexOf(XMP_HEAD);
+  const segLen = b.readUInt16BE(head - 2);
+  const start = head + XMP_HEAD.length;
+  const end = head - 2 + segLen;
+  const xml = b.toString('latin1', start, end);
+  const get = (q) => {
+    const m = new RegExp(`[ \\n]${q}="([^"]*)"|<${q}>([^<]*)</${q}>`).exec(xml);
+    return m ? m[1] ?? m[2] : null;
+  };
+  const padding = /([ \n]*)<\?xpacket end=/.exec(xml)[1].length;
+  return { segAt: head - 4, segLen, start, end, xml, padding, x: get('tiff:XResolution'), y: get('tiff:YResolution'), unit: get('tiff:ResolutionUnit'), get };
+}
+
+/** Every byte that differs between two equal-length buffers lies inside [from, to). */
+const changedOnlyIn = (a, b, from, to) => [...a.keys()].every((i) => a[i] === b[i] || (i >= from && i < to));
+
+test('XMP attribute form, rational: rewritten to n/1, unit inch, the padding grows by what the values shrank, nothing else moves', async () => {
+  const bare = await bareJpeg();
+  const attrs = ' tiff:XResolution="3000000/10000" tiff:YResolution="3000000/10000" tiff:ResolutionUnit="3" exif:FocalPlaneXResolution="1234/1"';
+  const src = splice(bare, jfif(), xmpPacket({ attrs }));
+  const out = patchJpegDensity(src, 72);
+  assert.deepEqual(out.patched, ['JFIF', 'XMP']);
+  assert.deepEqual(out.unpatched, []);
+  assert.equal(out.data.length, src.length);
+  const before = xmpBack(src);
+  const after = xmpBack(out.data);
+  assert.deepEqual([after.x, after.y, after.unit], ['72/1', '72/1', '2']);
+  assert.equal(after.get('exif:FocalPlaneXResolution'), '1234/1', 'a longer name that ends in XResolution is not touched');
+  assert.equal(after.segLen, before.segLen, 'the segment length bytes are unchanged');
+  assert.equal(after.padding, before.padding + 18, 'two values 9 bytes shorter: 18 more bytes of padding');
+  // Outside the packet only the JFIF fields change; inside it, nothing before the first value.
+  const firstValue = src.indexOf('3000000/10000');
+  const jfifAt = src.indexOf(Buffer.from('JFIF\0', 'latin1'));
+  const outside = [...src.keys()].filter((i) => (i < before.start || i >= before.end) && src[i] !== out.data[i]);
+  assert.ok(outside.every((i) => i >= jfifAt + 7 && i < jfifAt + 12), `bytes outside the packet changed: ${outside}`);
+  assert.ok(changedOnlyIn(src.subarray(before.start, before.end), out.data.subarray(before.start, before.end), firstValue - before.start, before.end - before.start));
+  assert.ok((await rgba(src)).equals(await rgba(out.data)), 'decoded pixels differ');
+  assert.deepEqual(readJpegDensity(out.data).xmp, { x: '72/1', y: '72/1', unit: '2' });
+});
+
+test('XMP element form, integer: rewritten as an integer, and a longer value takes its bytes from the padding', async () => {
+  const elements = '<tiff:XResolution>300</tiff:XResolution><tiff:YResolution>300</tiff:YResolution><tiff:ResolutionUnit>2</tiff:ResolutionUnit>';
+  const src = splice(await bareJpeg(), xmpPacket({ elements }));
+  const down = patchJpegDensity(src, 72);
+  assert.deepEqual(down.patched, ['JFIF (inserted)', 'XMP']);
+  const d = xmpBack(down.data);
+  assert.deepEqual([d.x, d.y, d.unit], ['72', '72', '2']);
+  assert.equal(d.padding, xmpBack(src).padding + 2);
+  const up = patchJpegDensity(src, 1200);
+  const u = xmpBack(up.data);
+  assert.deepEqual([u.x, u.y], ['1200', '1200']);
+  assert.equal(u.padding, xmpBack(src).padding - 2);
+  assert.equal(u.segLen, xmpBack(src).segLen);
+  assert.ok((await rgba(src)).equals(await rgba(up.data)), 'decoded pixels differ');
+});
+
+test('XMP under the exif: prefix is rewritten too', async () => {
+  const src = splice(await bareJpeg(), jfif(), xmpPacket({ attrs: ' exif:XResolution="300/1" exif:YResolution="300/1"' }));
+  const back = xmpBack(patchJpegDensity(src, 72).data);
+  assert.deepEqual([back.get('exif:XResolution'), back.get('exif:YResolution')], ['72/1', '72/1']);
+});
+
+test('XMP without padding for a longer value is refused, at the exact boundary', async () => {
+  const attrs = ' tiff:XResolution="300/1" tiff:YResolution="300/1"'; // 1200/1 is 2 bytes longer in all
+  const tooSmall = splice(await bareJpeg(), jfif(), seg(0xe1, Buffer.from(`${XMP_HEAD}<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description${attrs}/></rdf:RDF></x:xmpmeta> <?xpacket end="w"?>`, 'latin1')));
+  assert.throws(() => patchJpegDensity(tooSmall, 1200), (e) => e instanceof DensityError && e.code === 'stale-xmp' && /need 2 more bytes than the packet's padding holds \(1\)/.test(e.message));
+  const exact = splice(await bareJpeg(), jfif(), seg(0xe1, Buffer.from(`${XMP_HEAD}<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description${attrs}/></rdf:RDF></x:xmpmeta>  <?xpacket end="w"?>`, 'latin1')));
+  const ok = patchJpegDensity(exact, 1200);
+  assert.ok(ok.patched.includes('XMP'));
+  assert.ok(ok.data.toString('latin1').includes('tiff:YResolution="1200/1"/></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'), 'all of the padding was used');
+  // With allowStaleXmp the file is written with the old XMP and reported.
+  const stale = patchJpegDensity(tooSmall, 1200, { allowStaleXmp: true });
+  assert.deepEqual(stale.patched, ['JFIF']);
+  assert.match(stale.unpatched[0], /^XMP resolution fields \(still 300 ppi;/);
+  assert.ok(stale.data.subarray(stale.data.indexOf(XMP_HEAD)).equals(tooSmall.subarray(tooSmall.indexOf(XMP_HEAD))), 'the XMP is left exactly as it was');
+});
+
+test('XMP forms a narrow rewrite cannot handle safely are refused, never half-edited', async () => {
+  for (const [label, props] of [
+    ['element with attributes', { elements: '<tiff:XResolution rdf:datatype="x">300/1</tiff:XResolution>' }],
+    ['decimal value', { attrs: ' tiff:XResolution="300.5"' }],
+    ['entity in the value', { attrs: ' tiff:XResolution="&#51;00/1"' }],
+    ['rational unit', { attrs: ' tiff:ResolutionUnit="2/1"' }],
+    ['nested markup', { elements: '<tiff:XResolution><rdf:Alt>300/1</rdf:Alt></tiff:XResolution>' }],
+  ]) {
+    const src = splice(await bareJpeg(), jfif(), xmpPacket(props));
+    assert.throws(() => patchJpegDensity(src, 72), (e) => e instanceof DensityError && e.code === 'stale-xmp', label);
+    const stale = patchJpegDensity(src, 72, { allowStaleXmp: true });
+    assert.equal(stale.unpatched.length, 1, label);
+    const xmpAt = src.indexOf(XMP_HEAD);
+    assert.ok(stale.data.subarray(xmpAt).equals(src.subarray(xmpAt)), `${label}: the packet is untouched`);
+  }
+  // A packet that only mentions other resolution-like names needs nothing.
+  const other = patchJpegDensity(splice(await bareJpeg(), jfif(), xmpPacket({ attrs: ' exif:FocalPlaneXResolution="1234/1"' })), 72);
+  assert.deepEqual([other.patched, other.unpatched], [['JFIF'], []]);
+});
+
+test('Extended XMP (a packet split over several APP1 segments) is refused', async () => {
+  const ext = (xml) => seg(0xe1, Buffer.concat([Buffer.from('http://ns.adobe.com/xmp/extension/\0', 'latin1'), Buffer.from('0123456789ABCDEF0123456789ABCDEF', 'latin1'), Buffer.from([0, 0, 0, xml.length, 0, 0, 0, 0]), Buffer.from(xml, 'latin1')]));
+  const main = xmpPacket({ attrs: ' tiff:XResolution="300/1" xmpNote:HasExtendedXMP="0123456789ABCDEF0123456789ABCDEF"' });
+  const src = splice(await bareJpeg(), jfif(), main, ext('<x:xmpmeta><rdf:RDF><rdf:Description photoshop:History="..."/></rdf:RDF></x:xmpmeta>'));
+  assert.throws(() => patchJpegDensity(src, 72), (e) => e instanceof DensityError && e.code === 'stale-xmp' && /Extended XMP/.test(e.message));
+  // The resolution only in the extension: refused as well.
+  const inExt = splice(await bareJpeg(), jfif(), xmpPacket(), ext('<rdf:Description tiff:XResolution="300/1"/>'));
+  assert.throws(() => patchJpegDensity(inExt, 72), (e) => e.code === 'stale-xmp');
+  assert.match(patchJpegDensity(src, 72, { allowStaleXmp: true }).unpatched[0], /^XMP resolution fields \(still 300 ppi/);
 });
 
 test('input that is not a JPEG is refused', async () => {
@@ -513,8 +644,19 @@ test('processDirectory --density --keep-metadata --format png: the kept eXIf say
   }
 });
 
-test('processDirectory --density: a passed-through original that keeps an old XMP value is warned about and counted as stale, not written', async () => {
-  const r = await processFiles({ 'x.jpg': await xmpJpeg() }, { format: 'auto', density: 72 });
+test('processDirectory --density: a passed-through original whose XMP cannot be rewritten is refused, or with allowStaleXmp warned about and counted as stale', async () => {
+  const refused = await processFiles({ 'x.jpg': await xmpJpeg() }, { format: 'auto', density: 72 });
+  try {
+    assert.equal(refused.stats.processed, 0);
+    assert.equal(refused.stats.refused, 1);
+    assert.equal(refused.stats.refusedFiles[0].file, 'x.jpg');
+    assert.match(refused.stats.refusedFiles[0].reason, /^XMP resolution cannot be rewritten in place \(still 300 ppi\)/);
+    assert.equal(refused.stats.errors, 0, 'a refusal is not an error: nothing is copied through');
+    assert.deepEqual(await fs.readdir(refused.output).catch(() => []), [], 'nothing written');
+  } finally {
+    await fs.rm(refused.dir, { recursive: true, force: true });
+  }
+  const r = await processFiles({ 'x.jpg': await xmpJpeg() }, { format: 'auto', density: 72, allowStaleXmp: true });
   try {
     assert.equal(r.events.find((e) => e.type === 'done').engine, 'passthrough', 'the fixture must be passed through');
     assert.equal(r.stats.density.applied, 0);
@@ -571,16 +713,27 @@ test('lithocinch --density: the summary line counts written, stale, and skipped-
     await fs.writeFile(path.join(input, 'a.jpg'), await bareJpeg());
     await fs.writeFile(path.join(input, 'x.jpg'), await xmpJpeg());
     const to = (o) => [input, '-o', path.join(dir, o), '--error-dir', path.join(dir, 'err'), '--max-size', '0', '-q'];
-    // --format auto passes x.jpg through with its XMP: written, but stale.
-    const auto = run(...to('auto'), '--format', 'auto', '--density', '72');
+    // --format auto passes x.jpg through with its XMP, which has no padding:
+    // refused (exit 1, in --json too), or with --allow-stale-xmp written but stale.
+    const refused = run(...to('refused'), '--format', 'auto', '--density', '72');
+    assert.equal(refused.status, 1, refused.stderr);
+    assert.match(plain(refused.stderr), /^ {2}x\.jpg: not written: XMP resolution cannot be rewritten in place/m);
+    assert.match(plain(refused.stderr), /^ {2}refused {3}: 1 outputs not written/m);
+    const refusedJson = run(...to('refused-json'), '--format', 'auto', '--density', '72', '--json');
+    assert.equal(refusedJson.status, 1);
+    assert.deepEqual(JSON.parse(refusedJson.stdout).refusedFiles.map((f) => f.file), ['x.jpg']);
+    const auto = run(...to('auto'), '--format', 'auto', '--density', '72', '--allow-stale-xmp');
     assert.equal(auto.status, 0, auto.stderr);
     assert.match(plain(auto.stderr), /^ {2}density {3}: 72 ppi written to 1, not written to 0, 1 written but an older value kept in another field$/m);
-    const json = JSON.parse(run(...to('auto'), '--format', 'auto', '--density', '72', '--json').stdout);
+    const json = JSON.parse(run(...to('auto'), '--format', 'auto', '--density', '72', '--allow-stale-xmp', '--json').stdout);
     assert.deepEqual(json.density.staleFiles.map((f) => f.file), ['x.jpg']);
+    const lone = run(...to('lone'), '--allow-stale-xmp');
+    assert.equal(lone.status, 2, 'without --density it is a usage error');
+    assert.match(lone.stderr, /^error: --allow-stale-xmp needs --density$/m);
     // A re-run with another density skips the outputs that exist, and says so.
-    const first = run(...to('keep'), '--density', '72');
+    const first = run(...to('keep'), '--density', '72', '--allow-stale-xmp');
     assert.match(plain(first.stderr), /^ {2}density {3}: 72 ppi written to 2, not written to 0$/m);
-    const again = run(...to('keep'), '--density', '150');
+    const again = run(...to('keep'), '--density', '150', '--allow-stale-xmp');
     assert.match(plain(again.stderr), /^ {2}density {3}: 150 ppi written to 0, not written to 0, 2 skipped \(density not checked\)$/m);
   });
 });
@@ -693,12 +846,17 @@ test('density sub-command: usage errors exit 2 with a one-line message and nothi
   assert.match(help.stdout, /^Usage: lithocinch density/);
 });
 
-test('density sub-command: a file with XMP left stale is written but is a warn, and the run exits 1', async () => {
+test('density sub-command: XMP that cannot be rewritten is refused; with --allow-stale-xmp it is written as a warn; both exit 1', async () => {
   await withDir(async (dir) => {
     await fs.writeFile(path.join(dir, 'x.jpg'), splice(await bareJpeg(), xmp()));
     await fs.writeFile(path.join(dir, 'p.jpg'), splice(await bareJpeg(), jfif(), app13()));
     const out = path.join(dir, 'out');
-    const r = run('density', path.join(dir, 'x.jpg'), path.join(dir, 'p.jpg'), '--ppi', '72', '-o', out, '--brief');
+    const refused = run('density', path.join(dir, 'x.jpg'), '--ppi', '72', '-o', path.join(dir, 'refused'), '--brief');
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stdout, /^refuse XMP not rewritable {2}x\.jpg {2}\(XMP resolution cannot be rewritten in place \(still 300 ppi\): no packet padding/m);
+    assert.match(JSON.parse(run('density', path.join(dir, 'x.jpg'), '--ppi', '72', '-o', path.join(dir, 'refused'), '--json').stdout).items[0].reason, /; --allow-stale-xmp writes it anyway$/);
+    await assert.rejects(fs.access(path.join(dir, 'refused', 'x_lco.jpg')), 'a refused file is not written');
+    const r = run('density', path.join(dir, 'x.jpg'), path.join(dir, 'p.jpg'), '--ppi', '72', '-o', out, '--brief', '--allow-stale-xmp');
     assert.equal(r.status, 1, r.stdout);
     assert.match(r.stdout, /^warn set 72 ppi \(JFIF \(inserted\), \+18 bytes\) {2}x\.jpg {2}\(also present and not rewritten: XMP resolution fields \(still 300 ppi; Apple ImageIO \(Preview, Finder\) reads XMP before JFIF\)\)$/m);
     assert.match(r.stdout, /^ok set 72 ppi \(JFIF, Photoshop\) {2}p\.jpg$/m);
@@ -802,5 +960,61 @@ test('density sub-command: SIGINT mid-run removes the temporary files in flight 
     assert.deepEqual({ code, signal }, { code: 130, signal: null });
     const left = (await fs.readdir(out).catch(() => [])).filter((n) => n.endsWith('.tmp'));
     assert.deepEqual(left, [], 'no temporary file is left behind');
+  });
+});
+
+// ---- XMP end to end -----------------------------------------------------------
+
+/** An XMP-only JPEG at 300 ppi, Photoshop's element form with 2 KB of padding. */
+const paddedXmpJpeg = async () =>
+  splice(await bareJpeg(), xmpPacket({ elements: '<tiff:XResolution>3000000/10000</tiff:XResolution><tiff:YResolution>3000000/10000</tiff:YResolution><tiff:ResolutionUnit>2</tiff:ResolutionUnit>' }));
+
+const sipsDpi = (file) => {
+  const r = spawnSync('sips', ['-g', 'dpiWidth', '-g', 'dpiHeight', file], { encoding: 'utf8' });
+  return [...r.stdout.matchAll(/dpi(?:Width|Height): ([\d.]+)/g)].map((m) => Number(m[1]));
+};
+const hasSips = process.platform === 'darwin' && spawnSync('sips', ['--help'], { encoding: 'utf8' }).status === 0;
+
+test('density sub-command: an XMP with padding is rewritten in place, and the human view shows it before and after', async () => {
+  await withDir(async (dir) => {
+    const src = await paddedXmpJpeg();
+    await fs.writeFile(path.join(dir, 'x.jpg'), src);
+    const out = path.join(dir, 'out');
+    const r = run('density', path.join(dir, 'x.jpg'), '--ppi', '72', '-o', out);
+    assert.equal(r.status, 0, r.stdout);
+    assert.match(r.stdout, /^ok set 72 ppi \(JFIF \(inserted\), XMP, \+18 bytes\) {2}x\.jpg$/m);
+    assert.match(r.stdout, /^ {4}was {3}XMP 3000000\/10000 x 3000000\/10000 in$/m);
+    assert.match(r.stdout, /^ {4}now {3}JFIF 72x72 dpi, XMP 72\/1 x 72\/1 in$/m);
+    const got = await fs.readFile(path.join(out, 'x_lco.jpg'));
+    assert.deepEqual([xmpBack(got).x, xmpBack(got).y], ['72/1', '72/1']);
+    assert.ok((await rgba(got)).equals(await rgba(src)));
+  });
+});
+
+test('processDirectory --density: a passed-through original with padded XMP carries the new value there too', async () => {
+  const r = await processFiles({ 'x.jpg': await paddedXmpJpeg() }, { format: 'auto', density: 72 });
+  try {
+    assert.equal(r.events.find((e) => e.type === 'done').engine, 'passthrough', 'the fixture must be passed through');
+    assert.deepEqual([r.stats.density.applied, r.stats.density.stale, r.stats.refused], [1, 0, 0]);
+    const got = await fs.readFile(path.join(r.output, 'x_lco.jpg'));
+    assert.deepEqual([xmpBack(got).x, xmpBack(got).y, xmpBack(got).unit], ['72/1', '72/1', '2']);
+  } finally {
+    await fs.rm(r.dir, { recursive: true, force: true });
+  }
+});
+
+test('Apple ImageIO (sips) reads the rewritten XMP as the new ppi', { skip: !hasSips && 'sips is macOS only' }, async () => {
+  await withDir(async (dir) => {
+    const src = await paddedXmpJpeg();
+    const file = path.join(dir, 'x.jpg');
+    await fs.writeFile(file, src);
+    assert.deepEqual(sipsDpi(file), [300, 300], 'the fixture reads 300 before');
+    const r = run('density', file, '--ppi', '72', '-o', path.join(dir, 'out'), '-q');
+    assert.equal(r.status, 0, r.stdout);
+    assert.deepEqual(sipsDpi(path.join(dir, 'out', 'x_lco.jpg')), [72, 72]);
+    // The same file with only the JFIF patched still reads 300 there: XMP is what ImageIO used.
+    const jfifOnly = path.join(dir, 'jfif-only.jpg');
+    await fs.writeFile(jfifOnly, patchJpegDensity(splice(await bareJpeg(), xmp()), 72, { allowStaleXmp: true }).data);
+    assert.deepEqual(sipsDpi(jfifOnly), [300, 300]);
   });
 });

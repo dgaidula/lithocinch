@@ -23,19 +23,23 @@ import { runPool } from './pool.js';
 const HELP = `Usage: lithocinch density <file-or-folder...> --ppi <n> [options]
 
 Set the resolution header of JPEGs to <n> pixels per inch without re-encoding:
-the JFIF density, the EXIF XResolution/YResolution/ResolutionUnit and
-Photoshop's resolution resource are rewritten in place and every other byte,
-the image data included, is copied unchanged. A JPEG with neither JFIF nor
-EXIF gets an 18-byte JFIF header (unless that could change how its colours
-decode, in which case it is refused). XMP resolution values are not rewritten
-and make the file a warn. Folders are scanned recursively for .jpg and .jpeg;
-other images found there are listed as skipped.
+the JFIF density, the EXIF XResolution/YResolution/ResolutionUnit,
+Photoshop's resolution resource and the XMP resolution properties are
+rewritten in place and every other byte, the image data included, is copied
+unchanged. A JPEG with neither JFIF nor EXIF gets an 18-byte JFIF header
+(unless that could change how its colours decode, in which case it is
+refused). XMP is rewritten only when its packet padding absorbs the change in
+length; otherwise (or for Extended XMP) the file is refused, unless
+--allow-stale-xmp writes it as a warn. Folders are scanned recursively for
+.jpg and .jpeg; other images found there are listed as skipped.
 
 Options:
   --ppi <n>        resolution to write, a whole number 1-65535 (required)
   -o, --output <dir>  output directory (default: ../img-optimize-output/)
   -s, --suffix <str>  string inserted before each output extension (default: _lco)
   --overwrite      replace an output that already exists (default: skip it)
+  --allow-stale-xmp  write a file whose XMP resolution cannot be rewritten in
+                   place, as a warn, instead of refusing it
   --dry-run        read and check every file, write nothing
   --brief          one line per file, then a summary line
   --json           the full result as JSON on stdout
@@ -75,6 +79,10 @@ function describe(d) {
     const r = (v) => (v ? `${v[0]}/${v[1]}` : 'none');
     const unit = { 2: 'in', 3: 'cm', 1: 'no unit' }[d.exif.unit] ?? (d.exif.unit == null ? 'in (default)' : `unit ${d.exif.unit}`);
     parts.push(`EXIF ${r(d.exif.x)} x ${r(d.exif.y)} ${unit}`);
+  }
+  if (d.xmp) {
+    const unit = { 2: 'in', 3: 'cm' }[d.xmp.unit] ?? (d.xmp.unit == null ? 'in (default)' : `unit ${d.xmp.unit}`);
+    parts.push(`XMP ${d.xmp.x ?? 'none'} x ${d.xmp.y ?? 'none'} ${unit}`);
   }
   return parts.join(', ') || 'no density header';
 }
@@ -152,10 +160,11 @@ async function processFile(job, o) {
   let patch;
   try {
     before = readJpegDensity(bytes); // also rejects a non-JPEG or a damaged header
-    patch = patchJpegDensity(bytes, o.ppi);
+    patch = patchJpegDensity(bytes, o.ppi, { allowStaleXmp: o.allowStaleXmp });
   } catch (err) {
     if (!(err instanceof DensityError)) throw err;
-    return finish('refuse', err.code === 'not-jpeg' ? 'not a JPEG' : err.code === 'corrupt' ? 'damaged JPEG' : 'cannot hold a density', err.message);
+    const why = { 'not-jpeg': 'not a JPEG', corrupt: 'damaged JPEG', 'stale-xmp': 'XMP not rewritable' }[err.code] ?? 'cannot hold a density';
+    return finish('refuse', why, err.code === 'stale-xmp' ? `${err.message}; --allow-stale-xmp writes it anyway` : err.message);
   }
   // A header walk can't see a cut-off image, so decode once and refuse a
   // truncated file rather than hand on a copy that is just as broken.
@@ -172,10 +181,14 @@ async function processFile(job, o) {
     !after.exif ||
     ((after.exif.unit == null || after.exif.unit === 2) &&
       [after.exif.x, after.exif.y].every((v) => !v || (v[0] === o.ppi && v[1] === 1)));
+  const ppiText = [String(o.ppi), `${o.ppi}/1`];
+  const xmpOk =
+    !patch.patched.includes('XMP') ||
+    (after.xmp && [after.xmp.x, after.xmp.y].every((v) => v == null || ppiText.includes(v)) && (after.xmp.unit == null || after.xmp.unit === '2'));
   const keptOk =
     (!before.jfif || after.jfif) &&
     (!before.exif || (after.exif && ['x', 'y', 'unit'].every((k) => before.exif[k] == null || after.exif[k] != null)));
-  if (!jfifOk || !exifOk || !keptOk) return finish('fail', 'internal check failed', 'the rewritten header did not read back as requested; nothing written');
+  if (!jfifOk || !exifOk || !xmpOk || !keptOk) return finish('fail', 'internal check failed', 'the rewritten header did not read back as requested; nothing written');
 
   Object.assign(item.data, {
     before: describe(before),
@@ -321,6 +334,7 @@ export async function runDensity(argv, version) {
         output: { type: 'string', short: 'o', default: '../img-optimize-output/' },
         suffix: { type: 'string', short: 's', default: '_lco' },
         overwrite: { type: 'boolean', default: false },
+        'allow-stale-xmp': { type: 'boolean', default: false },
         'dry-run': { type: 'boolean', default: false },
         brief: { type: 'boolean', default: false },
         json: { type: 'boolean', default: false },
@@ -352,6 +366,7 @@ export async function runDensity(argv, version) {
     ppi,
     suffix: values.suffix,
     overwrite: values.overwrite,
+    allowStaleXmp: values['allow-stale-xmp'],
     dryRun: values['dry-run'],
     outputRoot: path.resolve(values.output),
   };

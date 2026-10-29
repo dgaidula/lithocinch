@@ -10,6 +10,7 @@ import { glob } from 'tinyglobby';
 
 import { resolveConfig, RASTER_EXTS, SVG_EXTS } from './config.js';
 import { optimizeBytes } from './transform.js';
+import { DensityError } from './density.js';
 import { buildOutputName, extNoDot } from './naming.js';
 import { runPool } from './pool.js';
 
@@ -75,7 +76,7 @@ export async function processDirectory(options = {}, hooks = {}) {
     bytesIn: 0,
     bytesOut: 0,
     errorFiles: [],
-    refused: 0, // outputs not written: another source claimed the same path
+    refused: 0, // outputs not written: another source claimed the same path, or (--density) an XMP that can't be rewritten
     refusedFiles: [], // {file, output, reason}
   };
   const refuse = (rel, outRel, reason, primary = true) => {
@@ -90,6 +91,7 @@ export async function processDirectory(options = {}, hooks = {}) {
   if (cfg.density != null) {
     stats.density = { ppi: cfg.density, applied: 0, notApplied: 0, notAppliedFiles: [], stale: 0, staleFiles: [], skipped: 0 };
   }
+  const staleXmp = (err) => err instanceof DensityError && err.code === 'stale-xmp';
   const noteDensity = (rel, outRel, d) => {
     if (!stats.density || !d) return; // not asked for, or an SVG (no raster density to write)
     if (d.applied && d.unpatched?.length) {
@@ -264,6 +266,9 @@ export async function processDirectory(options = {}, hooks = {}) {
           bytesOut: result.data.length,
         });
       } catch (err) {
+        // --density: an XMP resolution that can't be rewritten is a refusal, not a
+        // failure, so nothing is copied through with its old value.
+        if (staleXmp(err)) return void refuse(job.rel, job.predictedOut && path.relative(outputRoot, job.predictedOut), err.message);
         return recordError(job, err, 'optimize', bytes); // primary failed -> don't emit siblings
       }
     }
@@ -295,7 +300,8 @@ export async function processDirectory(options = {}, hooks = {}) {
           manifestEntries.push({ input: job.rel, output: sibRel, format: fmt, bytesOut: sib.data.length, emitted: true });
           onProgress({ type: 'emit', file: job.rel, outFile: sibRel, format: fmt, engine: sib.engine ?? null, bytesOut: sib.data.length });
         } catch (err) {
-          log.error(`[emit ${fmt}] ${job.rel}: ${err.message}`);
+          if (staleXmp(err)) refuse(job.rel, sibRel, err.message, false);
+          else log.error(`[emit ${fmt}] ${job.rel}: ${err.message}`);
         }
       }
     }

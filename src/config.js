@@ -43,6 +43,9 @@ export const DEFAULTS = Object.freeze({
   // leave it alone. Written after encoding by rewriting header bytes only (see
   // density.js), so it costs 0-21 bytes, not a re-encode. JPEG and PNG only.
   density: null,
+  // With density: a JPEG whose XMP resolution can't be rewritten in place is
+  // refused (not written) unless this is set; then it is written and reported.
+  allowStaleXmp: false,
 
   // ---- format / encoders ----
   format: null, // null = keep; 'jpeg'|'png'|'webp'|'avif'|'gif'|'tiff'; or 'auto' (pick best per image)

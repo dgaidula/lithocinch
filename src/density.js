@@ -16,9 +16,11 @@
 //     record, rewritten in place.
 // A JPEG with neither JFIF nor EXIF (what sharp itself writes) gets a JFIF APP0
 // inserted right after SOI: 18 bytes, and only where doing so cannot change how
-// a decoder reads the colour (see canInsertJfif). XMP resolution values are not
-// rewritten (the packet is text and may change length); they are reported, with
-// the value they still hold, rather than left to mislead. EXIF IFD1 (the
+// a decoder reads the colour (see canInsertJfif). XMP resolution properties
+// (tiff:XResolution and the like) are rewritten in place when the packet's
+// trailing padding can absorb the change in length (see rewriteXmp); when it
+// cannot, the file is refused (code 'stale-xmp'), or with `allowStaleXmp`
+// written and reported with the value the XMP still holds. EXIF IFD1 (the
 // thumbnail's) is neither rewritten nor reported: readers take IFD0.
 //
 // PNG carries it in the pHYs chunk (pixels per metre, so 300 ppi is stored as
@@ -34,7 +36,7 @@ import { parsePpi } from './config.js';
 
 /** A file this module will not rewrite, with a machine-readable reason. */
 export class DensityError extends Error {
-  /** @param {string} message  @param {'not-jpeg'|'not-png'|'corrupt'|'unsupported'} code */
+  /** @param {string} message  @param {'not-jpeg'|'not-png'|'corrupt'|'unsupported'|'stale-xmp'} code */
   constructor(message, code) {
     super(message);
     this.name = 'DensityError';
@@ -67,7 +69,8 @@ function scanJpeg(buf) {
     exifPresent: false,
     adobe: false,
     components: null, // [ids] from the SOF segment
-    xmpResolution: false,
+    xmp: [], // {start, end} of each XMP packet (after its namespace header)
+    xmpExtended: [], // the text of each Extended XMP segment
     xmpValue: null, // what the XMP XResolution says, for the warning ("300 ppi")
     photoshopResolution: false, // a 0x03ED resource that cannot be rewritten
     photoshop: [], // offsets of 16-byte 0x03ED records to rewrite
@@ -94,8 +97,11 @@ function scanJpeg(buf) {
       found.exifPresent = true;
       scanExif(buf, seg + 6, end, found);
     } else if (m === 0xe1 && text(29) === 'http://ns.adobe.com/xap/1.0/\0') {
-      if (/[XY]Resolution/.test(buf.toString('latin1', seg + 29, end))) found.xmpResolution = true;
+      found.xmp.push({ start: seg + 29, end });
       found.xmpValue ??= xmpResolutionValue(buf.toString('latin1', seg + 29, end));
+    } else if (m === 0xe1 && text(35) === 'http://ns.adobe.com/xmp/extension/\0') {
+      // Then a 32-byte GUID, the full length and this chunk's offset (4 bytes each).
+      found.xmpExtended.push(buf.toString('latin1', Math.min(seg + 35 + 40, end), end));
     } else if (m === 0xed && text(14) === 'Photoshop 3.0\0') {
       const at = hasPhotoshopResolution(buf, seg + 14, end);
       if (at === -1) found.photoshopResolution = true;
@@ -171,14 +177,103 @@ function hasPhotoshopResolution(buf, from, end) {
   return null;
 }
 
+// A resolution property in XMP, under any namespace prefix (tiff:XResolution,
+// exif:YResolution, ...), never a longer name such as exif:FocalPlaneXResolution.
+const XMP_FIELD = /(?<![\w.:-])[A-Za-z_][\w.-]*:(XResolution|YResolution|ResolutionUnit)(?![\w.:-])/g;
+const XMP_WS = ' \t\r\n';
+
+/**
+ * Find the resolution properties in an XMP packet, each with the offset and
+ * text of its value. Only two plain forms are read: an attribute
+ * (tiff:XResolution="300/1") and an element holding nothing but its value
+ * (<tiff:XResolution>300/1</tiff:XResolution>), the value a whole number or a
+ * fraction of whole numbers. Any other use of the names is a `problem`, and
+ * the packet is then left alone.
+ * @returns {{ fields: {name:string, qname:string, at:number, value:string, form:'rational'|'integer'}[], problem: string|null }}
+ */
+function xmpFields(xml) {
+  const fields = [];
+  for (const m of xml.matchAll(XMP_FIELD)) {
+    const qname = m[0];
+    const at = m.index;
+    const after = at + qname.length;
+    if (xml.startsWith('</', at - 2)) continue; // the closing tag of an element read below
+    let valueAt;
+    let value;
+    if (xml[at - 1] === '<') {
+      const el = /^>([^<]*)<\/([^\s>]+)[ \t\r\n]*>/.exec(xml.slice(after, after + 256));
+      if (!el || el[2] !== qname) return { fields, problem: `${qname} is an element with attributes or markup inside` };
+      [valueAt, value] = [after + 1, el[1]];
+    } else if (XMP_WS.includes(xml[at - 1] ?? 'x')) {
+      const attr = /^[ \t\r\n]*=[ \t\r\n]*(["'])([^"'<]*)\1/.exec(xml.slice(after, after + 256));
+      if (!attr) return { fields, problem: `${qname} is not a plain attribute` };
+      [valueAt, value] = [after + attr[0].length - 1 - attr[2].length, attr[2]];
+    } else {
+      return { fields, problem: `${qname} appears outside an attribute or element` };
+    }
+    const form = /^[0-9]+\/[0-9]+$/.test(value) ? 'rational' : /^[0-9]+$/.test(value) ? 'integer' : null;
+    if (!form || (m[1] === 'ResolutionUnit' && form !== 'integer')) {
+      return { fields, problem: `${qname} holds "${value}", not a whole number${m[1] === 'ResolutionUnit' ? '' : ' or a fraction'}` };
+    }
+    fields.push({ name: m[1], qname, at: valueAt, value, form });
+  }
+  return { fields, problem: null };
+}
+
+/** Does this XMP text name a resolution property at all? */
+const xmpHasField = (xml) => new RegExp(XMP_FIELD.source).test(xml);
+
 /** The XResolution an XMP packet states, as text for a warning ("300 ppi"), or null. */
 function xmpResolutionValue(xml) {
-  const v = /XResolution(?:\s*=\s*["']|>)\s*(\d+(?:\.\d+)?)(?:\s*\/\s*(\d+(?:\.\d+)?))?/.exec(xml);
-  if (!v) return null;
-  const value = Math.round((Number(v[1]) / (v[2] ? Number(v[2]) : 1)) * 100) / 100;
+  const { fields } = xmpFields(xml);
+  const x = fields.find((f) => f.name === 'XResolution');
+  if (!x) return null;
+  const [num, den = '1'] = x.value.split('/');
+  const value = Math.round((Number(num) / Number(den)) * 100) / 100;
   if (!Number.isFinite(value)) return null;
-  const unit = /ResolutionUnit(?:\s*=\s*["']|>)\s*(\d)/.exec(xml)?.[1];
+  const unit = fields.find((f) => f.name === 'ResolutionUnit')?.value;
   return `${value} ${unit === '3' ? 'per cm' : 'ppi'}`;
+}
+
+/**
+ * Rewrite the resolution properties of the XMP packet at [start, end) of `out`
+ * to `n` per inch, in place. Each value keeps its form (300/1 becomes n/1, 300
+ * becomes n) and ResolutionUnit becomes 2 (inch), as in EXIF. The difference
+ * in length is taken from, or given to, the packet's trailing padding (the
+ * whitespace before <?xpacket end=...?>), so the segment keeps its exact
+ * length and no byte outside the packet changes.
+ * @returns {string|null}  null when done (or nothing to do); otherwise why it
+ *   cannot be done, and nothing was written.
+ */
+function rewriteXmp(out, start, end, n) {
+  const xml = out.toString('latin1', start, end); // one char per byte: offsets are byte offsets
+  const { fields, problem } = xmpFields(xml);
+  if (problem) return problem;
+  if (!fields.length) return null;
+  let edited = '';
+  let from = 0;
+  for (const f of fields) {
+    const next = f.name === 'ResolutionUnit' ? '2' : f.form === 'rational' ? `${n}/1` : String(n);
+    edited += xml.slice(from, f.at) + next;
+    from = f.at + f.value.length;
+  }
+  const grow = edited.length - from; // bytes the new values add (negative: remove)
+  let result;
+  if (grow === 0) {
+    result = edited + xml.slice(from);
+  } else {
+    const endPi = xml.lastIndexOf('<?xpacket end=');
+    if (endPi < from) return 'no packet padding (no <?xpacket end?>) to absorb a change in length';
+    let pad = endPi;
+    while (pad > from && XMP_WS.includes(xml[pad - 1])) pad--;
+    if (grow > endPi - pad) return `the new values need ${grow} more bytes than the packet's padding holds (${endPi - pad})`;
+    result = grow > 0
+      ? edited + xml.slice(from, endPi - grow) + xml.slice(endPi)
+      : edited + xml.slice(from, endPi) + ' '.repeat(-grow) + xml.slice(endPi);
+  }
+  if (result.length !== xml.length) return 'internal: the rewritten packet changed length'; // never expected
+  out.write(result, start, 'latin1');
+  return null;
 }
 
 /**
@@ -220,12 +315,17 @@ const jfifSegment = (ppi) => {
  *
  * @param {Buffer|Uint8Array} input
  * @param {number|string} ppi  whole number, 1-65535
+ * @param {{ allowStaleXmp?: boolean }} [options]  allowStaleXmp: write a file
+ *   whose XMP resolution cannot be rewritten in place, and report it in
+ *   `unpatched`, instead of refusing it
  * @returns {{ data: Buffer, patched: string[], unpatched: string[] }}
- *   `patched` names what was written ('JFIF', 'EXIF', 'JFIF (inserted)');
- *   `unpatched` names density-bearing fields present but not rewritten.
- * @throws {DensityError} not a JPEG, a damaged header, or no way to carry a density
+ *   `patched` names what was written ('JFIF', 'EXIF', 'JFIF (inserted)',
+ *   'Photoshop', 'XMP'); `unpatched` names density-bearing fields present but
+ *   not rewritten.
+ * @throws {DensityError} not a JPEG, a damaged header, no way to carry a
+ *   density, or (code 'stale-xmp') an XMP resolution that cannot be rewritten
  */
-export function patchJpegDensity(input, ppi) {
+export function patchJpegDensity(input, ppi, { allowStaleXmp = false } = {}) {
   const n = parsePpi(ppi, 'ppi');
   const src = Buffer.isBuffer(input) ? input : Buffer.from(input);
   const found = scanJpeg(src);
@@ -253,8 +353,8 @@ export function patchJpegDensity(input, ppi) {
     out = Buffer.concat([out.subarray(0, 2), jfifSegment(n), out.subarray(2)]);
     patched.push('JFIF (inserted)');
   }
+  const shift = out.length - src.length; // 18 when a JFIF header was inserted before the segments below
   if (found.photoshop.length) {
-    const shift = out.length - src.length; // 18 when a JFIF header was inserted before it
     for (const at of found.photoshop) {
       // ResolutionInfo: hRes (16.16 fixed), hResUnit (1 = per inch), widthUnit,
       // vRes, vResUnit, heightUnit. The display units are left as they are.
@@ -268,11 +368,22 @@ export function patchJpegDensity(input, ppi) {
 
   const unpatched = [];
   if (found.photoshopResolution) unpatched.push('Photoshop resolution resource (APP13)');
-  if (found.xmpResolution) {
-    // Apple ImageIO (Preview, Finder) reads XMP before JFIF, though after EXIF.
-    const still = found.xmpValue ? `still ${found.xmpValue}` : 'still the old value';
-    const reader = found.exif.length ? 'programs that read XMP see it' : 'Apple ImageIO (Preview, Finder) reads XMP before JFIF';
-    unpatched.push(`XMP resolution fields (${still}; ${reader})`);
+  const xmpText = (p) => src.toString('latin1', p.start, p.end);
+  if (found.xmp.some((p) => xmpHasField(xmpText(p))) || xmpHasField(found.xmpExtended.join(''))) {
+    let why = null;
+    if (found.xmpExtended.length) why = 'the XMP is split over several segments (Extended XMP)';
+    else for (const p of found.xmp) if ((why = rewriteXmp(out, shift + p.start, shift + p.end, n))) break;
+    if (!why) {
+      patched.push('XMP');
+    } else {
+      // Apple ImageIO (Preview, Finder) reads XMP before JFIF, though after EXIF.
+      const still = found.xmpValue ? `still ${found.xmpValue}` : 'still the old value';
+      if (!allowStaleXmp) {
+        throw new DensityError(`XMP resolution cannot be rewritten in place (${still}): ${why}`, 'stale-xmp');
+      }
+      const reader = found.exif.length ? 'programs that read XMP see it' : 'Apple ImageIO (Preview, Finder) reads XMP before JFIF';
+      unpatched.push(`XMP resolution fields (${still}; ${reader})`);
+    }
   }
   return { data: out, patched, unpatched };
 }
@@ -294,7 +405,9 @@ function writeExif(out, fields, n) {
  * Read back a JPEG's density fields (for reporting and tests).
  * @param {Buffer} input
  * @returns {{ jfif: {units:number,x:number,y:number}|null,
- *             exif: {x:[number,number]|null,y:[number,number]|null,unit:number|null}|null }}
+ *             exif: {x:[number,number]|null,y:[number,number]|null,unit:number|null}|null,
+ *             xmp?: {x:string|null,y:string|null,unit:string|null} }}
+ *   `xmp` is present only when an XMP packet names a resolution property.
  */
 export function readJpegDensity(input) {
   const found = scanJpeg(input);
@@ -313,7 +426,16 @@ export function readJpegDensity(input) {
       else exif[f.tag === TAG_XRES ? 'x' : 'y'] = [input[r32](f.pos), input[r32](f.pos + 4)];
     }
   }
-  return { jfif, exif };
+  const result = { jfif, exif };
+  // XMP only when a packet names a resolution: the values as written ("300/1").
+  for (const p of found.xmp) {
+    const { fields } = xmpFields(input.toString('latin1', p.start, p.end));
+    if (!fields.length) continue;
+    const get = (name) => fields.find((f) => f.name === name)?.value ?? null;
+    result.xmp = { x: get('XResolution'), y: get('YResolution'), unit: get('ResolutionUnit') };
+    break;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,15 +548,18 @@ export function readPngDensity(input) {
  * @param {Buffer} data
  * @param {string} format  sharp format name ('jpeg', 'png', ...)
  * @param {number} ppi
+ * @param {{ allowStaleXmp?: boolean }} [options]  see patchJpegDensity
  * @returns {{ data: Buffer, applied: boolean, ppi: number, patched?: string[], unpatched?: string[], reason?: string }}
  *   applied:false carries a `reason`; the data is returned unchanged.
+ * @throws {DensityError} code 'stale-xmp': the output must not be written
  */
-export function applyDensity(data, format, ppi) {
+export function applyDensity(data, format, ppi, { allowStaleXmp = false } = {}) {
   try {
-    if (format === 'jpeg') return { ...patchJpegDensity(data, ppi), applied: true, ppi };
+    if (format === 'jpeg') return { ...patchJpegDensity(data, ppi, { allowStaleXmp }), applied: true, ppi };
     if (format === 'png') return { ...patchPngDensity(data, ppi), applied: true, ppi };
   } catch (err) {
-    if (!(err instanceof DensityError)) throw err;
+    // A stale XMP is a refusal (the output is not written), not a missing density.
+    if (!(err instanceof DensityError) || err.code === 'stale-xmp') throw err;
     return { data, applied: false, ppi, reason: err.message };
   }
   return { data, applied: false, ppi, reason: `${format} output has no resolution header lithocinch can write` };
