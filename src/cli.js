@@ -308,6 +308,9 @@ program.action(async (input, opts) => {
       case 'error':
         bar?.increment({ file: pc.red(`err ${truncate(evt.file)}`) });
         break;
+      case 'refuse':
+        if (evt.primary) bar?.increment({ file: pc.red(`refused ${truncate(evt.file)}`) });
+        break;
       case 'complete':
         bar?.stop();
         break;
@@ -327,14 +330,14 @@ program.action(async (input, opts) => {
   }
 
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-  if (stats.errors) process.exitCode = 1; // in every output mode, --json included
+  if (stats.errors || stats.refused) process.exitCode = 1; // in every output mode, --json included
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ...stats, ms: Math.round(ms) }, null, 2) + '\n');
     return;
   }
 
-  if (stats.processed === 0 && stats.skipped === 0 && stats.errors === 0) {
+  if (stats.processed === 0 && stats.skipped === 0 && stats.errors === 0 && !stats.refused) {
     process.stderr.write(pc.yellow(`\nNo images found under "${path.resolve(input)}".\n`));
     return;
   }
@@ -347,6 +350,7 @@ program.action(async (input, opts) => {
       `  processed : ${pc.green(stats.processed)}\n` +
       `  skipped   : ${stats.skipped}\n` +
       `  errors    : ${stats.errors ? pc.red(stats.errors) : 0}\n` +
+      (stats.refused ? `  refused   : ${pc.red(stats.refused)} outputs not written (reasons above)\n` : '') +
       `  copied    : ${stats.copied}\n` +
       (stats.emitted ? `  emitted   : ${stats.emitted} extra (${fmtBytes(stats.emittedBytes)})\n` : '') +
       (stats.density

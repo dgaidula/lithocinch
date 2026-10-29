@@ -75,6 +75,14 @@ export async function processDirectory(options = {}, hooks = {}) {
     bytesIn: 0,
     bytesOut: 0,
     errorFiles: [],
+    refused: 0, // outputs not written: another source claimed the same path
+    refusedFiles: [], // {file, output, reason}
+  };
+  const refuse = (rel, outRel, reason, primary = true) => {
+    stats.refused++;
+    stats.refusedFiles.push({ file: rel, output: outRel, reason });
+    log.error(`${rel}: not written: ${reason}`);
+    onProgress({ type: 'refuse', file: rel, outFile: outRel, reason, primary });
   };
   // --density: how many outputs carry it, which could not (reason per file),
   // which carry it but also keep an older value in a field that was not
@@ -134,13 +142,64 @@ export async function processDirectory(options = {}, hooks = {}) {
       spaceChar: cfg.spaceChar,
     });
     const relOut = cfg.flatten ? path.basename(previewName) : previewName;
+    const primaryFormat = primaryOutputFormat(rel, ext, isSvg, cfg);
+    // The output path as optimizeBytes will name it, where that is known before
+    // encoding (not under --format auto): the extension changes only when the
+    // format does. A file whose contents disagree with its extension is caught
+    // when it is written instead.
+    let predictedOut = null;
+    if (cfg.format !== 'auto') {
+      const extFormat = { jpg: 'jpeg', tif: 'tiff' }[ext] ?? ext;
+      const out = isSvg ? extFormat : primaryFormat;
+      const name = buildOutputName(rel, {
+        suffix: cfg.suffix,
+        outputFormat: out !== extFormat ? out : null,
+        lowercaseExt: cfg.lowercaseExt,
+        spaceChar: cfg.spaceChar,
+      });
+      predictedOut = path.join(outputRoot, cfg.flatten ? path.basename(name) : name);
+    }
+    const siblings = new Map(); // --emit format -> absolute output path
+    if (!isSvg) {
+      for (const fmt of cfg.emit) {
+        if (fmt === primaryFormat) continue;
+        const sibName = buildOutputName(rel, { suffix: cfg.suffix, outputFormat: fmt, lowercaseExt: cfg.lowercaseExt, spaceChar: cfg.spaceChar });
+        siblings.set(fmt, path.join(outputRoot, cfg.flatten ? path.basename(sibName) : sibName));
+      }
+    }
     plan.push({
       rel,
       isSvg,
       srcAbs: path.join(inputRoot, rel),
       previewOut: path.join(outputRoot, relOut),
-      primaryFormat: primaryOutputFormat(rel, ext, isSvg, cfg),
+      primaryFormat,
+      predictedOut,
+      siblings,
+      refused: null, // why the primary output is not written, when it collides
+      refusedSiblings: new Map(), // --emit format -> why
     });
+  }
+
+  // Output-name collisions (a.gif, a.png and a.webp under --format jpeg all
+  // become a_lco.jpg) are settled here, before any job starts, so concurrent
+  // jobs never race for one file. Primaries are claimed first, then --emit
+  // siblings, each in sorted source order: the first keeps the path and the
+  // later ones are refused. A name known only after encoding (--format auto)
+  // is claimed when it is written, and refused if it is taken by then.
+  const claimed = new Map(); // absolute output path -> source rel
+  const claim = (abs, rel) => {
+    const by = claimed.get(abs);
+    if (by !== undefined && by !== rel) return `${by} writes the same output: ${path.relative(outputRoot, abs)}`;
+    claimed.set(abs, rel);
+    return null;
+  };
+  const sorted = [...plan].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
+  for (const job of sorted) if (job.predictedOut) job.refused = claim(job.predictedOut, job.rel);
+  for (const job of sorted) {
+    for (const [fmt, abs] of job.siblings) {
+      const why = claim(abs, job.rel);
+      if (why) job.refusedSiblings.set(fmt, why);
+    }
   }
 
   await runPool(plan, cfg.concurrency, async (job) => {
@@ -158,7 +217,9 @@ export async function processDirectory(options = {}, hooks = {}) {
         ? prior && (await exists(path.join(outputRoot, prior.output)))
         : await exists(job.previewOut);
     const primaryNeeded = cfg.overwrite || !primaryExists;
-    if (!primaryNeeded) {
+    if (job.refused) {
+      refuse(job.rel, path.relative(outputRoot, job.predictedOut), job.refused);
+    } else if (!primaryNeeded) {
       stats.skipped++;
       if (stats.density) stats.density.skipped++; // its density was not checked
       if (prior) manifestEntries.push(prior); // carry the prior entry forward
@@ -173,6 +234,8 @@ export async function processDirectory(options = {}, hooks = {}) {
         const result = await optimizeBytes(bytes, job.rel, cfg);
         const relOut = cfg.flatten ? path.basename(result.outName) : result.outName;
         const destAbs = path.join(outputRoot, relOut);
+        const taken = claim(destAbs, job.rel);
+        if (taken) return void refuse(job.rel, relOut, taken);
         if (!cfg.dryRun) {
           await fs.mkdir(path.dirname(destAbs), { recursive: true });
           await fs.writeFile(destAbs, result.data);
@@ -209,14 +272,12 @@ export async function processDirectory(options = {}, hooks = {}) {
     if (!job.isSvg && cfg.emit.length) {
       for (const fmt of cfg.emit) {
         if (fmt === job.primaryFormat) continue; // don't duplicate the primary
-        const sibName = buildOutputName(job.rel, {
-          suffix: cfg.suffix,
-          outputFormat: fmt,
-          lowercaseExt: cfg.lowercaseExt,
-          spaceChar: cfg.spaceChar,
-        });
-        const sibRel = cfg.flatten ? path.basename(sibName) : sibName;
-        const sibDest = path.join(outputRoot, sibRel);
+        const sibDest = job.siblings.get(fmt);
+        const sibRel = path.relative(outputRoot, sibDest);
+        if (job.refusedSiblings.has(fmt)) {
+          refuse(job.rel, sibRel, job.refusedSiblings.get(fmt), false);
+          continue;
+        }
         if (!cfg.overwrite && (await exists(sibDest))) {
           if (stats.density) stats.density.skipped++;
           continue; // already emitted

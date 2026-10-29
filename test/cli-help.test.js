@@ -178,3 +178,38 @@ test('lithocinch transform with a bad option, bad JSON or a bad density is a one
     assert.equal(good.status, 0, good.stderr);
   });
 });
+
+test('sources that would write the same output are refused before any job starts, at any concurrency', async () => {
+  await withDir(async (dir) => {
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    await tiny('#c00').gif().toFile(path.join(input, 'a.gif'));
+    await tiny('#0c0').png().toFile(path.join(input, 'a.png'));
+    await tiny('#00c').webp().toFile(path.join(input, 'a.webp'));
+    const mean = async (file) => (await sharp(file).stats()).channels.slice(0, 3).map((c) => Math.round(c.mean / 64));
+    for (let k = 0; k < 3; k++) {
+      const out = path.join(dir, `jpeg${k}`);
+      const r = run(input, '-o', out, '--error-dir', path.join(dir, 'err'), '--format', 'jpeg', '-c', '8', '-q', '--json');
+      assert.equal(r.status, 1, r.stderr);
+      const stats = JSON.parse(r.stdout);
+      assert.equal(stats.processed, 1);
+      assert.deepEqual(stats.refusedFiles.map((f) => [f.file, f.output]).sort(), [['a.png', 'a_lco.jpg'], ['a.webp', 'a_lco.jpg']]);
+      assert.match(stats.refusedFiles[0].reason, /^a\.gif writes the same output: a_lco\.jpg$/);
+      assert.match(r.stderr, /^ {2}a\.png: not written: a\.gif writes the same output: a_lco\.jpg$/m);
+      assert.deepEqual(await fs.readdir(out), ['a_lco.jpg']);
+      assert.deepEqual(await mean(path.join(out, 'a_lco.jpg')), [3, 0, 0], 'the first source in sorted order (a.gif, red) wins every time');
+    }
+    // --emit: a primary keeps its own name; another file's sibling of that name is refused.
+    const out = path.join(dir, 'emit');
+    const r = run(input, '-o', out, '--error-dir', path.join(dir, 'err'), '--emit', 'webp', '-c', '8', '--json');
+    assert.equal(r.status, 1, r.stderr);
+    assert.deepEqual(JSON.parse(r.stdout).refusedFiles.map((f) => `${f.file} ${f.output}`).sort(), ['a.gif a_lco.webp', 'a.png a_lco.webp']);
+    assert.deepEqual(await mean(path.join(out, 'a_lco.webp')), [0, 0, 3], 'a.webp (blue) keeps a_lco.webp');
+    // Human mode names the count; a run with no collision has no such line.
+    const human = run(input, '-o', path.join(dir, 'h'), '--error-dir', path.join(dir, 'err'), '--format', 'png');
+    assert.match(human.stderr.replace(/\x1b\[[0-9;]*m/g, ''), /^ {2}refused {3}: 2 outputs not written \(reasons above\)$/m);
+    const none = run(input, '-o', path.join(dir, 'n'), '--error-dir', path.join(dir, 'err'));
+    assert.equal(none.status, 0, none.stderr);
+    assert.doesNotMatch(none.stderr, /refused/);
+  });
+});
