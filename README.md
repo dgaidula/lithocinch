@@ -208,6 +208,8 @@ AVIFs. Pair with `<picture>`:
 
 ## Resolution headers (`--density` and `lithocinch density`)
 
+**Hardened:** 2026-10-29 · 8b85bbf · gate CLOSED WITH FOLLOW-UPS (release gate at `xhigh` FIX FIRST, two fix rounds, re-gate and closure re-check; for the `--density` release)
+
 Some submission forms ask for an exact resolution (72 ppi for one awards
 program, 300 for print). The number lives in a few header bytes that do not
 affect the pixels, and lithocinch can set it two ways. They differ in what they
@@ -427,6 +429,23 @@ The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `r
 - **Only SIGINT and SIGTERM are cleaned up after.** A run killed with SIGKILL,
   or by a power cut, can leave hidden `.<name>.<pid>.<hex>.tmp` files beside
   its outputs; they are safe to delete.
+- **`lithocinch density` does not yet catch outputs that differ only in
+  case.** On a case-insensitive volume (the macOS default),
+  `lithocinch density a/Same.jpg b/same.jpg` reports both `ok` and leaves one
+  `Same_lco.jpg` holding the second file’s pixels, replacing the first without
+  `--overwrite`. The main command does catch this. Give such files distinct
+  names, or run them one at a time, until it is fixed.
+- **A resolution name in element text is refused.** A `dc:description` that
+  says “Set XResolution to 300” (or the name inside CDATA or a DOCTYPE) makes the
+  packet refused, with the reason “has no namespace prefix”. It is a safe
+  over-refusal; `--allow-stale-xmp` writes the file anyway.
+- **Collision checks and volumes.** When the output folder does not exist yet
+  and its nearest existing parent is a volume’s root, the case probe can ask the
+  wrong volume. On a case-sensitive volume, two names that differ only in
+  Unicode normalization (`café` written two ways) are not caught.
+- **Two XMP packets.** When the second cannot be rewritten,
+  `--allow-stale-xmp` writes the first one rewritten, and the warning names the
+  first packet’s new value rather than the stale one.
 
 ## Transform service (CMS plugin / Lambda backbone)
 
