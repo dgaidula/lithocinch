@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { promises as fs, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1142,52 +1142,92 @@ test('density sub-command: the Turkish dotless ı is not folded to i, so ılık 
   });
 });
 
-test('density sub-command: ᾴ written precomposed and as ᾳ plus an acute collide where the volume ignores case (normalized before the case fold)', async () => {
+test('density sub-command: ᾴ written precomposed and as ᾳ plus an acute (and ῷ against ῼ plus a perispomeni) collide where the volume ignores case (NFD before the case fold)', async () => {
   await withDir(async (dir) => {
     const flat = (c) => sharp({ create: { width: 16, height: 16, channels: 3, background: c } }).jpeg().toBuffer();
-    const one = 'ᾴ.jpg'; // alpha with oxia and ypogegrammeni
-    const two = 'ᾴ.jpg'; // alpha with ypogegrammeni, then a combining acute
+    const pairs = [
+      // alpha with oxia and ypogegrammeni / alpha with ypogegrammeni, then a combining acute (without the NFD they differ)
+      [String.fromCodePoint(0x1fb4), String.fromCodePoint(0x1fb3, 0x301)],
+      // omega with perispomeni and ypogegrammeni / capital omega with prosgegrammeni, then a combining perispomeni (with NFC first they differ)
+      [String.fromCodePoint(0x1ff7), String.fromCodePoint(0x1ffc, 0x342)],
+    ].map(([a, b]) => [`${a}.jpg`, `${b}.jpg`]);
     for (const d of ['a', 'b']) await fs.mkdir(path.join(dir, d));
-    await fs.writeFile(path.join(dir, 'a', one), await flat('#c00'));
-    await fs.writeFile(path.join(dir, 'b', two), await flat('#00c'));
+    for (const [one, two] of pairs) {
+      await fs.writeFile(path.join(dir, 'a', one), await flat('#c00'));
+      await fs.writeFile(path.join(dir, 'b', two), await flat('#00c'));
+    }
     // Ask the volume itself, independently of the code under test.
     const caseBlind = await fs.access(path.join(dir, 'A')).then(() => true, () => false);
-    const same = await fs.access(path.join(dir, 'a', two)).then(() => true, () => false);
-    const out = path.join(dir, 'out');
-    const r = run('density', path.join(dir, 'a', one), path.join(dir, 'b', two), '--ppi', '72', '-o', out, '--json');
-    const items = JSON.parse(r.stdout).items;
-    const outputs = await fs.readdir(out);
-    if (caseBlind && same) {
-      assert.deepEqual(items.map((it) => [it.verdict, it.summary]).slice(1), [['refuse', 'output collides']]);
-      assert.equal(items[0].verdict, 'ok');
-      assert.equal(outputs.length, 1);
-      const [rr, , bb] = (await sharp(path.join(out, outputs[0])).stats()).channels.map((c) => c.mean);
-      assert.ok(rr > bb, 'the first file (red) keeps the output');
-    } else {
-      assert.equal(outputs.length, items.filter((it) => it.verdict === 'ok').length, 'nothing overwritten');
+    for (const [k, [one, two]] of pairs.entries()) {
+      const same = await fs.access(path.join(dir, 'a', two)).then(() => true, () => false);
+      const out = path.join(dir, `out${k}`);
+      const r = run('density', path.join(dir, 'a', one), path.join(dir, 'b', two), '--ppi', '72', '-o', out, '--json');
+      const items = JSON.parse(r.stdout).items;
+      const outputs = await fs.readdir(out);
+      if (caseBlind && same) {
+        assert.deepEqual(items.map((it) => [it.verdict, it.summary]).slice(1), [['refuse', 'output collides']], one);
+        assert.equal(items[0].verdict, 'ok', one);
+        assert.equal(outputs.length, 1, one);
+        const [rr, , bb] = (await sharp(path.join(out, outputs[0])).stats()).channels.map((c) => c.mean);
+        assert.ok(rr > bb, `the first file (red) keeps the output: ${one}`);
+      } else {
+        assert.equal(outputs.length, items.filter((it) => it.verdict === 'ok').length, `nothing overwritten: ${one}`);
+      }
     }
   });
 });
 
-test('outputs that differ only in Unicode normalization collide on case-sensitive APFS, which still ignores normalization', { skip: process.platform !== 'darwin' && 'needs macOS hdiutil to make a case-sensitive APFS disk image' }, async () => {
-  await withDir(async (dir) => {
-    const img = path.join(dir, 'cs.dmg');
-    const mnt = path.join(dir, 'mnt');
-    const hd = (...args) => spawnSync('hdiutil', args, { encoding: 'utf8' });
-    // A temp folder already on a case-sensitive volume is used as it is (an image
-    // cannot be attached inside one); otherwise a case-sensitive APFS image is made.
-    await fs.writeFile(path.join(dir, 'probe'), '');
-    const image = await fs.access(path.join(dir, 'PROBE')).then(() => true, () => false);
-    if (image) {
-      const made = hd('create', '-fs', 'Case-sensitive APFS', '-size', '20m', '-volname', 'lco-cs', img);
-      assert.equal(made.status, 0, made.stderr);
-      await fs.mkdir(mnt);
-      const attached = hd('attach', '-nobrowse', '-noverify', '-mountpoint', mnt, img);
-      assert.equal(attached.status, 0, attached.stderr);
+/**
+ * Make a 20 MB disk image of `fsName` in `dir`, attach it at `dir/mnt` and run
+ * `fn(mnt)`; the image is detached afterwards. Interrupted (SIGINT, SIGTERM,
+ * even while hdiutil is still attaching), it is detached and `dir` removed
+ * before the signal is raised again; those two listeners are registered once
+ * and left in place, since a signal that also stops the CLI being run fails
+ * the test first and reaches them only after `finally`. hdiutil cannot attach
+ * an image inside a folder that is itself on an attached image, so there the
+ * test is skipped, saying why.
+ */
+async function withImage(t, dir, fsName, fn) {
+  const img = path.join(dir, 'image.dmg');
+  const mnt = path.join(dir, 'mnt');
+  const hd = (...args) => spawnSync('hdiutil', args, { encoding: 'utf8' });
+  let mounted = false;
+  const detach = () => {
+    if (!mounted) return;
+    mounted = false;
+    if (hd('detach', mnt).status !== 0) hd('detach', '-force', mnt);
+  };
+  const onSignal = (signal) => {
+    detach();
+    rmSync(dir, { recursive: true, force: true });
+    process.kill(process.pid, signal);
+  };
+  process.once('exit', detach);
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
+  try {
+    const made = hd('create', '-fs', fsName, '-size', '20m', '-volname', 'lco-test', img);
+    assert.equal(made.status, 0, made.stderr);
+    await fs.mkdir(mnt);
+    mounted = true; // a failed or interrupted attach is detached too, harmlessly
+    const attached = hd('attach', '-nobrowse', '-noverify', '-mountpoint', mnt, img);
+    if (attached.status !== 0 && /Permission denied/.test(attached.stderr)) {
+      t.skip(`hdiutil cannot attach a ${fsName} image here (is the temp folder itself on an attached image?)`);
+      return;
     }
-    try {
+    assert.equal(attached.status, 0, attached.stderr);
+    await fn(mnt);
+  } finally {
+    process.removeListener('exit', detach);
+    detach();
+  }
+}
+
+test('outputs that differ only in Unicode normalization collide on case-sensitive APFS, which still ignores normalization', { skip: process.platform !== 'darwin' && 'needs macOS hdiutil to make a case-sensitive APFS disk image' }, async (t) => {
+  await withDir(async (dir) => {
+    const body = async (where) => {
       // The output folder's parent is not the volume root, so the case probe asks this volume.
-      const vol = path.join(image ? mnt : dir, 'vol');
+      const vol = path.join(where, 'vol');
       await fs.mkdir(vol);
       const flat = (c) => sharp({ create: { width: 16, height: 16, channels: 3, background: c } }).jpeg().toBuffer();
       const nfc = 'Café.jpg'.normalize('NFC');
@@ -1200,14 +1240,20 @@ test('outputs that differ only in Unicode normalization collide on case-sensitiv
       for (const d of ['a', 'b']) await fs.mkdir(path.join(dir, d));
       await fs.writeFile(path.join(dir, 'a', nfc), await flat('#c00'));
       await fs.writeFile(path.join(dir, 'b', nfd), await flat('#00c'));
+      await fs.writeFile(path.join(dir, 'a', 'Logo.jpg'), await flat('#c00'));
+      await fs.writeFile(path.join(dir, 'b', 'logo.jpg'), await flat('#00c'));
       const out = path.join(vol, 'out');
-      const r = run('density', path.join(dir, 'a', nfc), path.join(dir, 'b', nfd), '--ppi', '72', '-o', out, '--json');
+      const args = [`a/${nfc}`, `b/${nfd}`, 'a/Logo.jpg', 'b/logo.jpg'].map((f) => path.join(dir, f));
+      const r = run('density', ...args, '--ppi', '72', '-o', out, '--json');
       assert.equal(r.status, 1, r.stdout);
       const items = JSON.parse(r.stdout).items;
-      assert.deepEqual(items.map((it) => [it.verdict, it.summary]), [['ok', items[0].summary], ['refuse', 'output collides']]);
+      assert.deepEqual(items.map((it) => it.verdict), ['ok', 'refuse', 'ok', 'ok'], 'Café twice is one name; Logo and logo are two');
+      assert.equal(items[1].summary, 'output collides');
       const outputs = await fs.readdir(out);
-      assert.equal(outputs.length, 1);
-      const [rr, , bb] = (await sharp(path.join(out, outputs[0])).stats()).channels.map((c) => c.mean);
+      assert.deepEqual(outputs.filter((f) => /^logo/i.test(f)).sort(), ['Logo_lco.jpg', 'logo_lco.jpg']);
+      assert.equal(outputs.length, 3);
+      const cafe = outputs.find((f) => !/^logo/i.test(f));
+      const [rr, , bb] = (await sharp(path.join(out, cafe)).stats()).channels.map((c) => c.mean);
       assert.ok(rr > bb, 'the first file (red) keeps the output');
       // The main command: Café.png and Café.gif (two forms) both become one Café_lco.jpg there.
       const input = path.join(dir, 'in');
@@ -1218,9 +1264,46 @@ test('outputs that differ only in Unicode normalization collide on case-sensitiv
       assert.equal(main.status, 1, main.stderr);
       assert.equal(JSON.parse(main.stdout).refusedFiles.length, 1);
       assert.equal((await fs.readdir(path.join(vol, 'main'))).length, 1);
-    } finally {
-      if (image && hd('detach', mnt).status !== 0) hd('detach', '-force', mnt);
-    }
+    };
+    // A temp folder already on a case-sensitive volume is used as it is (an image
+    // cannot be attached inside one); otherwise a case-sensitive APFS image is made.
+    await fs.writeFile(path.join(dir, 'probe'), '');
+    if (await fs.access(path.join(dir, 'PROBE')).then(() => true, () => false)) await withImage(t, dir, 'Case-sensitive APFS', body);
+    else await body(dir);
+  });
+});
+
+test('outputs that differ only in a code point HFS+ ignores, or in Georgian case, collide on HFS+', { skip: process.platform !== 'darwin' && 'needs macOS hdiutil to make an HFS+ disk image' }, async (t) => {
+  await withDir(async (dir) => {
+    await withImage(t, dir, 'HFS+', async (mnt) => {
+      const vol = path.join(mnt, 'vol');
+      await fs.mkdir(vol);
+      const flat = (c) => sharp({ create: { width: 16, height: 16, channels: 3, background: c } }).jpeg().toBuffer();
+      const pairs = [
+        // a, ZERO WIDTH NON-JOINER, b / ab
+        [String.fromCodePoint(0x61, 0x200c, 0x62), 'ab'],
+        // Georgian capital an (Asomtavruli) / Georgian letter an (Mkhedruli)
+        [String.fromCodePoint(0x10a0), String.fromCodePoint(0x10d0)],
+      ].map(([a, b]) => [`${a}.jpg`, `${b}.jpg`]);
+      // Ask the volume itself: each pair is one name on HFS+.
+      for (const [one, two] of pairs) {
+        await fs.writeFile(path.join(vol, one), '');
+        assert.equal(await fs.access(path.join(vol, two)).then(() => true, () => false), true, `${one} and ${two} are one name here`);
+        await fs.rm(path.join(vol, one));
+      }
+      for (const d of ['a', 'b']) await fs.mkdir(path.join(dir, d));
+      for (const [one, two] of pairs) {
+        await fs.writeFile(path.join(dir, 'a', one), await flat('#c00'));
+        await fs.writeFile(path.join(dir, 'b', two), await flat('#00c'));
+      }
+      const out = path.join(vol, 'out');
+      const r = run('density', ...pairs.flatMap(([one, two]) => [path.join(dir, 'a', one), path.join(dir, 'b', two)]), '--ppi', '72', '-o', out, '--json');
+      assert.equal(r.status, 1, r.stdout);
+      const items = JSON.parse(r.stdout).items;
+      assert.deepEqual(items.map((it) => it.verdict), ['ok', 'refuse', 'ok', 'refuse']);
+      assert.deepEqual(items.filter((it) => it.verdict === 'refuse').map((it) => it.summary), ['output collides', 'output collides']);
+      assert.equal((await fs.readdir(out)).length, 2, 'one output per pair');
+    });
   });
 });
 

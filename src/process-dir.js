@@ -60,10 +60,16 @@ async function caseInsensitive(dir) {
  * case-folded (ß ~ ss, µ ~ μ, as APFS folds; the Turkish dotless ı is kept, as
  * APFS keeps ılık and ilik apart) and NFC where the volume ignores case, NFC
  * alone where it does not (case-sensitive APFS still ignores normalization).
+ * Where it ignores case, the code points HFS+ ignores in names are dropped and
+ * Georgian is folded as HFS+ folds it (Ⴀ ~ ა), which refuses a little more on
+ * other volumes.
  */
+const HFS_IGNORED = /[\u200C-\u200F\u202A-\u202E\u206A-\u206F\uFEFF]/g;
+const NUSKHURI = /[\u2D00-\u2D25]/g; // what Ⴀ (U+10A0) folds to here; HFS+ folds it to ა (U+10D0)
 export async function outputPathKey(outputRoot) {
   return (await caseInsensitive(outputRoot))
-    ? (abs) => abs.normalize('NFD').split('ı').map((s) => s.toLowerCase().toUpperCase().toLowerCase()).join('ı').normalize('NFC')
+    ? (abs) => abs.replace(HFS_IGNORED, '').normalize('NFD').split('ı').map((s) => s.toLowerCase().toUpperCase().toLowerCase()).join('ı').normalize('NFC')
+      .replace(NUSKHURI, (c) => String.fromCharCode(c.charCodeAt(0) - 0x2D00 + 0x10D0))
     : (abs) => abs.normalize('NFC');
 }
 
