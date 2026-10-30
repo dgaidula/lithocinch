@@ -57,13 +57,14 @@ async function caseInsensitive(dir) {
 
 /**
  * The key two output paths under `outputRoot` are compared by: fully
- * case-folded (ß ~ ss, µ ~ μ, as APFS folds) and NFC where the volume ignores
- * case, exact where it does not.
+ * case-folded (ß ~ ss, µ ~ μ, as APFS folds; the Turkish dotless ı is kept, as
+ * APFS keeps ılık and ilik apart) and NFC where the volume ignores case, NFC
+ * alone where it does not (case-sensitive APFS still ignores normalization).
  */
 export async function outputPathKey(outputRoot) {
   return (await caseInsensitive(outputRoot))
-    ? (abs) => abs.normalize('NFD').toLowerCase().toUpperCase().toLowerCase().normalize('NFC')
-    : (abs) => abs;
+    ? (abs) => abs.normalize('NFD').split('ı').map((s) => s.toLowerCase().toUpperCase().toLowerCase()).join('ı').normalize('NFC')
+    : (abs) => abs.normalize('NFC');
 }
 
 async function copyThrough(srcAbs, destAbs, dryRun) {
