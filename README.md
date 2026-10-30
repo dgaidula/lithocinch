@@ -442,14 +442,15 @@ The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `r
   over-refusal; `--allow-stale-xmp` writes the file anyway.
 - **Collision checks and volumes.** When the output folder does not exist yet
   and its nearest existing parent is a volume’s root, the case probe can ask the
-  wrong volume. On a case-sensitive APFS volume, which still ignores Unicode
-  normalization, two names that differ only in normalization (`café` written
-  two ways) are not caught, and the second file wins. Where the volume ignores
-  case, names are compared under a full case fold, which refuses more than some
-  volumes need: the Turkish dotless `ı` matches `i` (APFS keeps `ılık` and
-  `ilik` apart), and on exFAT (and probably NTFS) `Straße`/`Strasse` and
-  `µ`/`μ` are refused although the volume keeps both. These refusals never
-  overwrite anything.
+  wrong volume. Names that differ only in Unicode normalization (`café`
+  written two ways) are refused on every volume, as APFS treats them as one
+  file even when it is case-sensitive; a volume that keeps the two forms apart
+  (ext4 and most Linux file systems) could have held both. Where the volume
+  ignores case, names are compared under a full case fold, which refuses more
+  than some volumes need: on exFAT (and probably NTFS) `Straße`/`Strasse` and
+  `µ`/`μ` are refused although the volume keeps both, and on APFS so are two
+  pairs of letters newer than its case table (`꟒`/`ꟓ` and `꟔`/`ꟕ`, Unicode
+  14). These refusals never overwrite anything.
 - **Two XMP packets.** When the second cannot be rewritten,
   `--allow-stale-xmp` writes the first one rewritten, and the warning names the
   first packet’s new value rather than the stale one.
