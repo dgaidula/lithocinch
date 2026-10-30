@@ -208,7 +208,7 @@ AVIFs. Pair with `<picture>`:
 
 ## Resolution headers (`--density` and `lithocinch density`)
 
-**Hardened:** 2026-10-29 · 9488d26 · gate CLOSED WITH FOLLOW-UPS (release gate at `xhigh` FIX FIRST, two fix rounds, re-gate and closure re-check at 8b85bbf; then D523, D524 and D527, release gate at `xhigh` PASS WITH FOLLOW-UPS, one fix round (D534) and closure re-check; for 3.3.0)
+**Hardened:** 2026-10-30 · 41292dd · gate CLOSED WITH FOLLOW-UPS (D536: release gate at `xhigh` FIX FIRST on an HFS+ silent overwrite that 3.3.0 also had, one fix round, closure re-check at `high` with 0 silent overwrites on HFS+, APFS and case-sensitive APFS; for 3.3.1. 3.3.0: 2026-10-29 · 9488d26 · CLOSED WITH FOLLOW-UPS)
 
 Some submission forms ask for an exact resolution (72 ppi for one awards
 program, 300 for print). The number lives in a few header bytes that do not
