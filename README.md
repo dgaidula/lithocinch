@@ -440,17 +440,33 @@ The library exports `patchJpegDensity`, `patchPngDensity`, `readJpegDensity`, `r
   says “Set XResolution to 300” (or the name inside CDATA or a DOCTYPE) makes the
   packet refused, with the reason “has no namespace prefix”. It is a safe
   over-refusal; `--allow-stale-xmp` writes the file anyway.
-- **Collision checks and volumes.** When the output folder does not exist yet
-  and its nearest existing parent is a volume’s root, the case probe can ask the
-  wrong volume. Names that differ only in Unicode normalization (`café`
+- **Collision checks and volumes.** Whether the output volume ignores case is
+  probed by looking up the nearest existing folder of the output path with the
+  case of its ASCII letters swapped; a folder whose name has none (`2024`,
+  `日本`) is passed over for its parent. So when the folder probed is a
+  volume’s root (the output folder does not exist yet, or its name has no
+  ASCII letter, and its parent is the root), the probe asks the volume that
+  root is mounted on and can get the wrong answer: for an existing
+  `/media/u/CARD/2024` on an exFAT card mounted under ext4, the card is taken
+  for case-sensitive, and `Logo_lco.jpg` and `logo_lco.jpg` overwrite each
+  other there. Names that differ only in Unicode normalization (`café`
   written two ways) are refused on every volume, as APFS treats them as one
   file even when it is case-sensitive; a volume that keeps the two forms apart
   (ext4 and most Linux file systems) could have held both. Where the volume
-  ignores case, names are compared under a full case fold, which refuses more
-  than some volumes need: on exFAT (and probably NTFS) `Straße`/`Strasse` and
-  `µ`/`μ` are refused although the volume keeps both, and on APFS so are two
-  pairs of letters newer than its case table (`꟒`/`ꟓ` and `꟔`/`ꟕ`, Unicode
-  14). These refusals never overwrite anything.
+  ignores case, names are compared under a full case fold, with the code
+  points HFS+ ignores in names (U+200C–200F, U+202A–202E, U+206A–206F,
+  U+FEFF) dropped and Georgian `Ⴀ`–`Ⴥ` matched to `ა`–`ჵ` as HFS+ matches
+  them. That refuses more than some volumes need: on HFS+ (Mac OS Extended),
+  whose case table is older, 1,887 groups of names it keeps apart in a
+  70,581-name sample (`ß`/`ss`, `ς`/`σ`, the Kelvin sign and `K`, Cherokee,
+  Deseret …); on APFS, 40 groups in the same sample (names that differ only by
+  one of those ignored code points, and the 38 Georgian pairs); on exFAT (and
+  probably NTFS), `Straße`/`Strasse` and `µ`/`μ`. These refusals never
+  overwrite anything.
+- **Samba shares are not checked.** A share that matches names by simple
+  Unicode upper-casing (`ı` to `I`) would treat `ılık` and `ILIK` as one name,
+  which 3.3.1 writes as two (3.3.0 refused the second). Unverified: no Samba
+  share was at hand.
 - **Two XMP packets.** When the second cannot be rewritten,
   `--allow-stale-xmp` writes the first one rewritten, and the warning names the
   first packet’s new value rather than the stale one.
