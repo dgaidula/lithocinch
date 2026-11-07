@@ -1072,6 +1072,7 @@ test('density sub-command: outputs that differ only in case or Unicode normaliza
     const flat = (c) => sharp({ create: { width: 16, height: 16, channels: 3, background: c } }).jpeg().toBuffer();
     const nfc = 'Café.jpg'.normalize('NFC');
     const nfd = 'café.jpg'.normalize('NFD');
+    assert.notEqual(nfd, nfd.normalize('NFC'), 'the second name of the pair really is NFD');
     for (const d of ['a', 'b']) await fs.mkdir(path.join(dir, d));
     await fs.writeFile(path.join(dir, 'a/Same.jpg'), await flat('#c00'));
     await fs.writeFile(path.join(dir, 'b/same.jpg'), await flat('#00c'));

@@ -208,7 +208,7 @@ AVIFs. Pair with `<picture>`:
 
 ## Resolution headers (`--density` and `lithocinch density`)
 
-**Hardened:** 2026-10-30 · 41292dd · gate CLOSED WITH FOLLOW-UPS (D536: release gate at `xhigh` FIX FIRST on an HFS+ silent overwrite that 3.3.0 also had, one fix round, closure re-check at `high` with 0 silent overwrites on HFS+, APFS and case-sensitive APFS; for 3.3.1. 3.3.0: 2026-10-29 · 9488d26 · CLOSED WITH FOLLOW-UPS)
+**Hardened:** 2026-11-07 · aa774c1 · gate CLOSED WITH FOLLOW-UPS (D576, 3.3.2: release gate at `xhigh`, 12 of 20 mutants killed, the density output proven plain ASCII on a U+200B name; follow-ups under Not covered above). 3.3.1: 2026-10-30 · 41292dd · gate CLOSED WITH FOLLOW-UPS (D536: release gate at `xhigh` FIX FIRST on an HFS+ silent overwrite that 3.3.0 also had, one fix round, closure re-check at `high` with 0 silent overwrites on HFS+, APFS and case-sensitive APFS; for 3.3.1. 3.3.0: 2026-10-29 · 9488d26 · CLOSED WITH FOLLOW-UPS)
 
 Some submission forms ask for an exact resolution (72 ppi for one awards
 program, 300 for print). The number lives in a few header bytes that do not
@@ -384,10 +384,16 @@ line), `--json`, and `--quiet` (the summary line). Verdicts are `ok`, `warn`,
 refused, failed or warned about, or no JPEG found to work on, `2` usage error,
 `3` the run could not complete.
 
-A file name is printed with control characters and invisible ones (zero-width
-spaces and joiners, directional marks, the byte-order mark) as escapes such as
-`\u200b`, so two names that differ only by one do not look alike; `--json`
-keeps the real name.
+A file name is printed with control characters and Unicode format characters
+(category Cf: zero-width spaces and joiners, directional marks, the byte-order
+mark, tag characters) as escapes such as `\u200b`, so two names that differ only
+by one do not look alike; `--json` keeps the real name. Joiners used on purpose
+print as escapes too (an emoji family sequence, a Persian zero-width non-joiner,
+a flag\u2019s tag characters). Not covered: other invisible characters outside Cf
+(variation selectors such as U+FE0F, the Hangul fillers, the combining grapheme
+joiner) print raw, and a backslash is not escaped, so a name typed with the
+literal text `\u200b` prints like one holding the character; `--json` tells
+them apart.
 
 ```
 $ lithocinch density print-export.jpg --ppi 72 -o ready --brief
