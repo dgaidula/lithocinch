@@ -56,14 +56,21 @@ warned about, or no JPEG was found; 2 usage error; 3 the run could not complete.
 
 const VERDICTS = ['ok', 'warn', 'skip', 'refuse', 'fail'];
 
-/** Show control characters as escapes so one item is always one line. */
+/**
+ * Show control and invisible characters as escapes, so one item is always one
+ * line and two names that differ only by an invisible character (a zero-width
+ * space, a joiner, a directional mark) do not look alike. The invisible ones
+ * are the Unicode format characters (Cf).
+ */
 const isControl = (n) =>
-  (n < 32 && n !== 9) || (n >= 0x7f && n <= 0x9f) || n === 0x2028 || n === 0x2029 || (n >= 0x202a && n <= 0x202e) || (n >= 0x2066 && n <= 0x2069);
+  (n < 32 && n !== 9) || (n >= 0x7f && n <= 0x9f) || n === 0x2028 || n === 0x2029 || /^\p{Cf}$/u.test(String.fromCodePoint(n));
+const hex = (n, width) => n.toString(16).padStart(width, '0');
 const esc = (s) =>
   [...String(s)]
     .map((c) => {
       const n = c.codePointAt(0);
-      return isControl(n) ? (n < 256 ? `\\x${n.toString(16).padStart(2, '0')}` : `\\u${n.toString(16).padStart(4, '0')}`) : c;
+      if (!isControl(n)) return c;
+      return n < 256 ? `\\x${hex(n, 2)}` : n < 0x10000 ? `\\u${hex(n, 4)}` : `\\u{${n.toString(16)}}`;
     })
     .join('');
 
@@ -310,7 +317,7 @@ function render(mode, items, counts, ctx) {
       lines.push(`${it.verdict} ${it.summary}  ${esc(it.name)}${reason}`);
       if (mode === 'human' && it.data.after) {
         lines.push(`    was   ${it.data.before}`, `    now   ${it.data.after}`);
-        lines.push(`    to    ${it.data.output}  (${it.data.bytesIn} -> ${it.data.bytesOut} bytes)`);
+        lines.push(`    to    ${esc(it.data.output)}  (${it.data.bytesIn} -> ${it.data.bytesOut} bytes)`);
       }
     }
   }

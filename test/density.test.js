@@ -1070,8 +1070,8 @@ test('density sub-command: two inputs that would write the same output are refus
 test('density sub-command: outputs that differ only in case or Unicode normalization collide where the volume treats them as one file', async () => {
   await withDir(async (dir) => {
     const flat = (c) => sharp({ create: { width: 16, height: 16, channels: 3, background: c } }).jpeg().toBuffer();
-    const nfc = 'Café.jpg';
-    const nfd = 'café.jpg';
+    const nfc = 'Café.jpg'.normalize('NFC');
+    const nfd = 'café.jpg'.normalize('NFD');
     for (const d of ['a', 'b']) await fs.mkdir(path.join(dir, d));
     await fs.writeFile(path.join(dir, 'a/Same.jpg'), await flat('#c00'));
     await fs.writeFile(path.join(dir, 'b/same.jpg'), await flat('#00c'));
@@ -1181,11 +1181,12 @@ test('density sub-command: ᾴ written precomposed and as ᾳ plus an acute (and
  * Make a 20 MB disk image of `fsName` in `dir`, attach it at `dir/mnt` and run
  * `fn(mnt)`; the image is detached afterwards. Interrupted (SIGINT, SIGTERM,
  * even while hdiutil is still attaching), it is detached and `dir` removed
- * before the signal is raised again; those two listeners are registered once
- * and left in place, since a signal that also stops the CLI being run fails
- * the test first and reaches them only after `finally`. hdiutil cannot attach
- * an image inside a folder that is itself on an attached image, so there the
- * test is skipped, saying why.
+ * before the signal is raised again. Each call adds its own two `once`
+ * listeners and leaves them in place (each fires at most once, and a signal
+ * that also stops the CLI being run fails the test first, so it reaches them
+ * only after `finally`); only the `exit` listener is removed. hdiutil cannot
+ * attach an image inside a folder that is itself on an attached image, so
+ * there the test is skipped, saying why.
  */
 async function withImage(t, dir, fsName, fn) {
   const img = path.join(dir, 'image.dmg');
@@ -1328,6 +1329,35 @@ test('density sub-command: a folder with no JPEG lists what it skipped and exits
     assert.equal(r.status, 1, r.stdout);
     assert.match(r.stdout, /^skip no JPEG files {2}/m);
     assert.match(r.stdout, /^skip not a JPEG {2}a\.png {2}\(lithocinch density rewrites JPEGs only\)$/m);
+  });
+});
+
+test('density sub-command: invisible format characters in a name are shown as escapes, so Logo.jpg and a zero-width Logo.jpg do not look alike', async () => {
+  await withDir(async (dir) => {
+    // Built in code: typed, these characters would be invisible in this file too.
+    const zwsp = String.fromCharCode(0x200b);
+    const rlo = String.fromCharCode(0x202e);
+    const tag = String.fromCodePoint(0xe0041);
+    const bs = String.fromCharCode(92);
+    const name = `Lo${zwsp}go${rlo}${tag}.jpg`;
+    const shown = `Lo${bs}u200bgo${bs}u202e${bs}u{e0041}.jpg`;
+    await fs.writeFile(path.join(dir, name), await bareJpeg());
+    await fs.writeFile(path.join(dir, 'Logo.jpg'), await bareJpeg());
+    for (const mode of ['--brief', '--dry-run']) {
+      const out = path.join(dir, `out${mode}`);
+      const r = run('density', path.join(dir, name), path.join(dir, 'Logo.jpg'), '--ppi', '72', '-o', out, mode);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.ok(!/\p{Cf}/u.test(r.stdout), `${mode}: no invisible character is printed raw`);
+      assert.ok(r.stdout.includes(`  ${shown}`), `${mode}: the name is shown with its escapes`);
+      assert.match(r.stdout, /^ok .* {2}Logo\.jpg$/m);
+    }
+    // The "to" line of the default view is escaped too.
+    const human = run('density', path.join(dir, name), '--ppi', '72', '-o', path.join(dir, 'out-human'), '--overwrite');
+    assert.ok(!/\p{Cf}/u.test(human.stdout), human.stdout);
+    assert.ok(human.stdout.includes(`${shown.replace('.jpg', '')}_lco.jpg`), human.stdout);
+    // The JSON items keep the real name.
+    const json = JSON.parse(run('density', path.join(dir, name), '--ppi', '72', '-o', path.join(dir, 'out-json'), '--json').stdout);
+    assert.equal(json.items[0].name, name);
   });
 });
 

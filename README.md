@@ -384,6 +384,11 @@ line), `--json`, and `--quiet` (the summary line). Verdicts are `ok`, `warn`,
 refused, failed or warned about, or no JPEG found to work on, `2` usage error,
 `3` the run could not complete.
 
+A file name is printed with control characters and invisible ones (zero-width
+spaces and joiners, directional marks, the byte-order mark) as escapes such as
+`\u200b`, so two names that differ only by one do not look alike; `--json`
+keeps the real name.
+
 ```
 $ lithocinch density print-export.jpg --ppi 72 -o ready --brief
 ok set 72 ppi (JFIF, EXIF)  print-export.jpg

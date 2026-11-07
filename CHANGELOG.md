@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.3.2 — 2026-11-07
+- Fix: `lithocinch density` printed invisible characters in a file name raw, so `Logo.jpg` and a `Logo.jpg` with a zero-width space in it looked like the same name. Every Unicode format character (zero-width space and joiners, directional marks, the soft hyphen, the byte-order mark, tag characters) is now shown as an escape (`\u200b`, `\u{e0041}`) in the human and `--brief` views, in a reason and in the `to` line; `--json` keeps the real name.
+- Tests: the normalization pair in the case-and-normalization collision test is built with `normalize`, so an editor that normalizes the file cannot turn it into two identical names; a comment on the disk-image helper’s signal listeners is corrected (each call adds its own `once` listeners and leaves them in place).
+- Docs: the Samba case stays unverified (Known limits).
+
 ## 3.3.1 — 2026-10-30
 - Fix: where the output volume ignores case, the collision check folded the Turkish dotless `ı` to `i`, so `ılık` and `ilik`, two files on APFS, were refused as one output; both are now written. Applies to the main command and `lithocinch density`.
 - Fix: where the output volume is case-sensitive, two outputs whose names differ only in Unicode normalization (`café` written two ways) were both written, and on case-sensitive APFS, which ignores normalization, the second overwrote the first; the later one is now refused (`output collides` under `lithocinch density`, `refused` on the main command). On a volume that keeps the two forms apart (ext4) this refuses a file that could have been written.
