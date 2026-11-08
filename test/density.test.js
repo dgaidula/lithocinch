@@ -1187,8 +1187,13 @@ test('density sub-command: ᾴ written precomposed and as ᾳ plus an acute (and
  * that also stops the CLI being run fails the test first, so it reaches them
  * only after `finally`); only the `exit` listener is removed. hdiutil cannot
  * attach an image inside a folder that is itself on an attached image, so
- * there the test is skipped, saying why.
+ * there the test is skipped, saying why. So is a `hdiutil create` that cannot
+ * reach the disk-images service ("Device not configured": the Claude Code
+ * sandbox blocks it, and it can fail under load too): tried a second time,
+ * then skipped, and the later calls skip without trying again. Any other
+ * create failure fails the test.
  */
+let diskImagesUnavailable = null; // the error text, once `hdiutil create` could not reach the device twice
 async function withImage(t, dir, fsName, fn) {
   const img = path.join(dir, 'image.dmg');
   const mnt = path.join(dir, 'mnt');
@@ -1208,7 +1213,21 @@ async function withImage(t, dir, fsName, fn) {
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   try {
-    const made = hd('create', '-fs', fsName, '-size', '20m', '-volname', 'lco-test', img);
+    if (diskImagesUnavailable) {
+      t.skip(`hdiutil cannot make a disk image here: ${diskImagesUnavailable}`);
+      return;
+    }
+    const create = () => hd('create', '-fs', fsName, '-size', '20m', '-volname', 'lco-test', img);
+    let made = create();
+    if (made.status !== 0 && /Device not configured/.test(made.stderr)) {
+      rmSync(img, { force: true }); // a half-made image from the first try
+      made = create();
+    }
+    if (made.status !== 0 && /Device not configured/.test(made.stderr)) {
+      diskImagesUnavailable = made.stderr.trim();
+      t.skip(`hdiutil cannot make a disk image here: ${diskImagesUnavailable}`);
+      return;
+    }
     assert.equal(made.status, 0, made.stderr);
     await fs.mkdir(mnt);
     mounted = true; // a failed or interrupted attach is detached too, harmlessly
@@ -1359,6 +1378,140 @@ test('density sub-command: invisible format characters in a name are shown as es
     // The JSON items keep the real name.
     const json = JSON.parse(run('density', path.join(dir, name), '--ppi', '72', '-o', path.join(dir, 'out-json'), '--json').stdout);
     assert.equal(json.items[0].name, name);
+  });
+});
+
+test('density sub-command: control and invisible characters in a name and in a reason are escapes in the default view and --brief, one line per item', async () => {
+  await withDir(async (dir) => {
+    const bs = String.fromCharCode(92);
+    // Each name is `a<char>b.jpg`; the character is built in code, never typed.
+    // [code point, how it must be shown]
+    const cases = [
+      [0x0a, `${bs}x0a`], // newline
+      [0x0d, `${bs}x0d`], // carriage return
+      [0x1b, `${bs}x1b`], // ESC, a C0 control
+      [0x7f, `${bs}x7f`], // DEL
+      [0x85, `${bs}x85`], // NEL, a C1 control
+      [0x9f, `${bs}x9f`], // the last C1 control
+      [0xad, `${bs}xad`], // soft hyphen: Cf below 0x100, so \x and not \u
+      [0x200c, `${bs}u200c`], // zero-width non-joiner
+      [0x200d, `${bs}u200d`], // zero-width joiner
+      [0x200e, `${bs}u200e`], // left-to-right mark
+      [0x2028, `${bs}u2028`], // line separator (Zl, not Cf)
+      [0x2029, `${bs}u2029`], // paragraph separator (Zp, not Cf)
+      [0x202a, `${bs}u202a`], // left-to-right embedding
+      [0x2060, `${bs}u2060`], // word joiner
+      [0x2066, `${bs}u2066`], // left-to-right isolate
+      [0xfeff, `${bs}ufeff`], // byte-order mark
+      [0xe0067, `${bs}u{e0067}`], // tag letter g: above the BMP
+    ];
+    // The letter in front keeps the names apart: they would collide on a volume that ignores case if some differed only by an ignorable code point.
+    const names = cases.map(([n], k) => `${String.fromCharCode(97 + k)}${String.fromCodePoint(n)}b.jpg`);
+    for (const name of names) await fs.writeFile(path.join(dir, name), await bareJpeg());
+    const files = names.map((name) => path.join(dir, name));
+    const out = path.join(dir, 'out');
+    const first = run('density', ...files, '--ppi', '72', '-o', out, '--brief');
+    assert.equal(first.status, 0, first.stdout + first.stderr);
+    // Second run: every output exists, so each item is a skip whose reason holds the output path.
+    for (const mode of [[], ['--brief']]) {
+      const r = run('density', ...files, '--ppi', '72', '-o', out, ...mode);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const label = mode[0] ?? 'default view';
+      assert.ok(!/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(r.stdout.replaceAll('\n', '')), `${label}: nothing invisible or controlling is printed raw`);
+      const lines = r.stdout.split('\n');
+      assert.equal(lines.length, names.length + 2, `${label}: one line per item, then the summary (and the end of the last line)`);
+      assert.equal(lines.at(-1), '');
+      assert.match(lines.at(-2), /^summary: /);
+      cases.forEach(([n, shown], k) => {
+        const line = lines[k];
+        assert.ok(line.startsWith('skip output exists  '), `${label}: ${shown}: ${line}`);
+        const letter = String.fromCharCode(97 + k);
+        assert.ok(line.includes(`  ${letter}${shown}b.jpg  (`), `${label}: the name shows ${shown}: ${line}`);
+        assert.ok(line.includes(`${out}${path.sep}${letter}${shown}b_lco.jpg already exists`), `${label}: the reason shows ${shown}: ${line}`);
+      });
+    }
+  });
+});
+
+test('density sub-command: the --brief reason is cut at 160 characters of output, never inside an escape', async () => {
+  await withDir(async (dir) => {
+    const bs = String.fromCharCode(92);
+    const zwsp = String.fromCharCode(0x200b);
+    const out = path.join(dir, 'out');
+    assert.ok(/^[\x20-\x7e]*$/.test(out) && out.length < 150, out);
+    // The reason is `<out>/<base>_lco.jpg already exists (--overwrite replaces it)`; put the
+    // zero-width space, shown as a 6-character escape, at index `at` of it.
+    const probe = async (at, label) => {
+      const base = 'x'.repeat(at - (out.length + 1)) + zwsp + 'y'.repeat(40);
+      const name = `${base}.jpg`;
+      await fs.writeFile(path.join(dir, name), await bareJpeg());
+      const args = ['density', path.join(dir, name), '--ppi', '72', '-o', out, '--brief'];
+      assert.equal(run(...args).status, 0);
+      const r = run(...args); // the output exists now: a skip, with the path in its reason
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      const reason = `${path.join(out, `${base}_lco.jpg`)} already exists (--overwrite replaces it)`;
+      assert.equal([...reason].indexOf(zwsp), at, label);
+      await fs.rm(path.join(dir, name));
+      await fs.rm(path.join(out, `${base}_lco.jpg`));
+      return { line: r.stdout.split('\n')[0], reason: [...reason], shown: reason.slice(0, at) };
+    };
+    // An escape of 6 characters that starts at index 157 would end at 163, over the cut: the cut moves back to its start.
+    const over = await probe(157, 'over');
+    assert.ok(over.line.endsWith(`  (${over.shown}… (+${over.reason.length - 157} chars; --json for all))`), over.line);
+    assert.ok(!over.line.slice(over.line.indexOf('  (')).includes(`${bs}u`), over.line);
+    // Starting at 155, it would end at 161, one over: the same.
+    const one = await probe(155, 'one over');
+    assert.ok(one.line.endsWith(`  (${one.shown}… (+${one.reason.length - 155} chars; --json for all))`), one.line);
+    // Starting at 154, it ends at exactly 160: kept whole.
+    const edge = await probe(154, 'edge');
+    assert.ok(edge.line.endsWith(`  (${edge.shown}${bs}u200b… (+${edge.reason.length - 155} chars; --json for all))`), edge.line);
+    // Starting at 150, it ends at 156, inside the 160: kept whole, and four more characters fit after it.
+    const inside = await probe(150, 'inside');
+    assert.ok(inside.line.endsWith(`  (${inside.shown}${bs}u200byyyy… (+${inside.reason.length - 155} chars; --json for all))`), inside.line);
+  });
+});
+
+test('density sub-command: messages on stderr show the control and invisible characters of a name as escapes', async () => {
+  await withDir(async (dir) => {
+    const bs = String.fromCharCode(92);
+    const zwsp = String.fromCharCode(0x200b);
+    // A usage error that echoes the argument.
+    const bad = run('density', '--ppi', '72', `--x${zwsp}y`);
+    assert.equal(bad.status, 2, bad.stderr);
+    assert.ok(!/\p{Cf}/u.test(bad.stderr), bad.stderr);
+    assert.ok(bad.stderr.includes(`--x${bs}u200by`), bad.stderr);
+    // A run that cannot complete: fault injection, as in the exit 3 test below, with a name in the message.
+    const jpeg = splice(await bareJpeg(), jfif());
+    const file = path.join(dir, 'a.jpg');
+    await fs.writeFile(file, Buffer.concat([jpeg, Buffer.alloc(77777 - jpeg.length)]));
+    const fault = 'data:text/javascript,' + encodeURIComponent(
+      'const r = Buffer.prototype.readUInt16BE; Buffer.prototype.readUInt16BE = function (o) { if (this.length === 77777) throw new Error("Lo" + String.fromCharCode(0x200b) + "go.jpg"); return r.call(this, o); };'
+    );
+    const r = spawnSync(process.execPath, ['--import', fault, CLI, 'density', file, '--ppi', '72', '-o', path.join(dir, 'out'), '--brief'], { encoding: 'utf8', input: '' });
+    assert.equal(r.status, 3, r.stdout + r.stderr);
+    assert.ok(!/\p{Cf}/u.test(r.stderr), r.stderr);
+    assert.match(r.stderr, new RegExp(`^lithocinch density: could not complete: Lo\\${bs}u200bgo\\.jpg$`, 'm'));
+  });
+});
+
+test('main command: file names in the per-file lines and in messages show invisible characters as escapes; --json keeps the real name', async () => {
+  await withDir(async (dir) => {
+    const bs = String.fromCharCode(92);
+    const zwsp = String.fromCharCode(0x200b);
+    const input = path.join(dir, 'in');
+    await fs.mkdir(input);
+    await fs.writeFile(path.join(input, `Lo${zwsp}go.jpg`), await bareJpeg());
+    await fs.writeFile(path.join(input, `Bad${zwsp}.jpg`), 'not an image');
+    const r = run(input, '-o', path.join(dir, 'out'), '--error-dir', path.join(dir, 'err'), '--verbose');
+    assert.equal(r.status, 1, r.stderr);
+    assert.ok(!/\p{Cf}/u.test(r.stderr + r.stdout), 'no invisible character is printed raw');
+    assert.ok(r.stderr.includes(`Lo${bs}u200bgo.jpg -> Lo${bs}u200bgo_lco.jpg (`), r.stderr);
+    assert.ok(r.stderr.includes(`Bad${bs}u200b.jpg`), r.stderr);
+    // The files really carry the character, and --json keeps the real name.
+    assert.deepEqual((await fs.readdir(path.join(dir, 'out'))).filter((f) => f.startsWith('Lo')), [`Lo${zwsp}go_lco.jpg`]);
+    const json = run(input, '-o', path.join(dir, 'out2'), '--error-dir', path.join(dir, 'err2'), '--json');
+    assert.ok(JSON.parse(json.stdout), 'valid JSON');
+    assert.ok(!/\p{Cf}/u.test(json.stderr), json.stderr);
   });
 });
 

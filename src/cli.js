@@ -12,6 +12,7 @@ import pc from 'picocolors';
 
 import { processDirectory } from './process-dir.js';
 import { OUTPUT_FORMATS, resolveConfig } from './config.js';
+import { esc } from './escape.js';
 
 const pkg = JSON.parse(
   readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8')
@@ -266,10 +267,13 @@ program.action(async (input, opts) => {
   let bar = null;
   const quiet = opts.quiet;
 
+  // Names and paths in a message are shown with control and invisible characters escaped.
+  const note = (paint, m) => process.stderr.write(paint(`  ${m}\n`));
+  const noteInfo = (m) => !quiet && note(pc.dim, m); // for a line that escapes its names itself
   const logger = {
-    info: (m) => !quiet && process.stderr.write(pc.dim(`  ${m}\n`)),
-    warn: (m) => !quiet && process.stderr.write(pc.yellow(`  ${m}\n`)),
-    error: (m) => process.stderr.write(pc.red(`  ${m}\n`)),
+    info: (m) => !quiet && note(pc.dim, esc(m)),
+    warn: (m) => !quiet && note(pc.yellow, esc(m)),
+    error: (m) => note(pc.red, esc(m)),
   };
 
   const onProgress = (evt) => {
@@ -297,22 +301,22 @@ program.action(async (input, opts) => {
           // passthrough); the built-in sharp paths are the unremarkable default.
           const builtin = evt.engine === 'sharp' || evt.engine === 'sharp-ssim' || evt.engine === 'sharp-fixed';
           const e = evt.engine && !builtin ? pc.cyan(` via ${evt.engine}`) : '';
-          logger.info(`${evt.file} -> ${evt.outFile} (${fmtBytes(evt.bytesIn)} -> ${fmtBytes(evt.bytesOut)}${q}${s})${e}`);
+          noteInfo(`${esc(evt.file)} -> ${esc(evt.outFile)} (${fmtBytes(evt.bytesIn)} -> ${fmtBytes(evt.bytesOut)}${q}${s})${e}`);
         }
-        bar?.increment({ file: truncate(evt.file) });
+        bar?.increment({ file: esc(truncate(evt.file)) });
         break;
       }
       case 'emit':
-        if (opts.verbose) logger.info(`  + ${evt.outFile} (${fmtBytes(evt.bytesOut)})${evt.engine ? pc.cyan(` via ${evt.engine}`) : ''}`);
+        if (opts.verbose) noteInfo(`  + ${esc(evt.outFile)} (${fmtBytes(evt.bytesOut)})${evt.engine ? pc.cyan(` via ${evt.engine}`) : ''}`);
         break;
       case 'skip':
-        bar?.increment({ file: pc.dim(`skip ${truncate(evt.file)}`) });
+        bar?.increment({ file: pc.dim(`skip ${esc(truncate(evt.file))}`) });
         break;
       case 'error':
-        bar?.increment({ file: pc.red(`err ${truncate(evt.file)}`) });
+        bar?.increment({ file: pc.red(`err ${esc(truncate(evt.file))}`) });
         break;
       case 'refuse':
-        if (evt.primary) bar?.increment({ file: pc.red(`refused ${truncate(evt.file)}`) });
+        if (evt.primary) bar?.increment({ file: pc.red(`refused ${esc(truncate(evt.file))}`) });
         break;
       case 'complete':
         bar?.stop();
@@ -327,7 +331,7 @@ program.action(async (input, opts) => {
     stats = await processDirectory(options, { onProgress, logger });
   } catch (err) {
     bar?.stop();
-    process.stderr.write(pc.red(`\nFatal: ${err.message}\n`));
+    process.stderr.write(pc.red(`\nFatal: ${esc(err.message)}\n`));
     process.exitCode = 1;
     return;
   }
@@ -342,7 +346,7 @@ program.action(async (input, opts) => {
   }
 
   if (stats.processed === 0 && stats.skipped === 0 && stats.errors === 0 && !stats.refused) {
-    process.stderr.write(pc.yellow(`\nNo images found under "${path.resolve(input)}".\n`));
+    process.stderr.write(pc.yellow(`\nNo images found under "${esc(path.resolve(input))}".\n`));
     return;
   }
 
@@ -368,7 +372,7 @@ program.action(async (input, opts) => {
       `  time      : ${(ms / 1000).toFixed(2)}s\n`
   );
   if (stats.errors) {
-    process.stderr.write(pc.red(`  see ${path.resolve(options.errorDir)} for the ${stats.errors} failed file(s)\n`));
+    process.stderr.write(pc.red(`  see ${esc(path.resolve(options.errorDir))} for the ${stats.errors} failed file(s)\n`));
   }
 });
 

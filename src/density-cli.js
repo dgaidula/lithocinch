@@ -17,6 +17,7 @@ import { glob } from 'tinyglobby';
 
 import { parsePpi, RASTER_EXTS } from './config.js';
 import { patchJpegDensity, readJpegDensity, DensityError } from './density.js';
+import { esc, escChars } from './escape.js';
 import { buildOutputName } from './naming.js';
 import { runPool } from './pool.js';
 import { outputPathKey } from './process-dir.js';
@@ -55,24 +56,6 @@ warned about, or no JPEG was found; 2 usage error; 3 the run could not complete.
 `;
 
 const VERDICTS = ['ok', 'warn', 'skip', 'refuse', 'fail'];
-
-/**
- * Show control and invisible characters as escapes, so one item is always one
- * line and two names that differ only by an invisible character (a zero-width
- * space, a joiner, a directional mark) do not look alike. The invisible ones
- * are the Unicode format characters (Cf).
- */
-const isControl = (n) =>
-  (n < 32 && n !== 9) || (n >= 0x7f && n <= 0x9f) || n === 0x2028 || n === 0x2029 || /^\p{Cf}$/u.test(String.fromCodePoint(n));
-const hex = (n, width) => n.toString(16).padStart(width, '0');
-const esc = (s) =>
-  [...String(s)]
-    .map((c) => {
-      const n = c.codePointAt(0);
-      if (!isControl(n)) return c;
-      return n < 256 ? `\\x${hex(n, 2)}` : n < 0x10000 ? `\\u${hex(n, 4)}` : `\\u{${n.toString(16)}}`;
-    })
-    .join('');
 
 const firstLine = (s) => String(s).split('\n')[0];
 
@@ -297,9 +280,13 @@ function summarize(items) {
 const summaryLine = (counts, dryRun) =>
   `summary: ${VERDICTS.map((v) => `${v}=${counts[v]}`).join(' ')}${dryRun ? '  (dry run: nothing written)' : ''}`;
 
+/** The reason escaped and cut to 160 characters of output, always between two characters, never inside an escape. */
 function briefReason(reason) {
-  const chars = [...esc(reason)];
-  return chars.length > 160 ? `${chars.slice(0, 160).join('')}… (+${chars.length - 160} chars; --json for all)` : chars.join('');
+  const chars = escChars(reason);
+  let shown = 0;
+  let width = 0;
+  while (shown < chars.length && width + chars[shown].length <= 160) width += chars[shown++].length;
+  return shown < chars.length ? `${chars.slice(0, shown).join('')}… (+${chars.length - shown} chars; --json for all)` : chars.join('');
 }
 
 function render(mode, items, counts, ctx) {
@@ -328,7 +315,7 @@ function render(mode, items, counts, ctx) {
 // ---- entry point -----------------------------------------------------------
 
 function usageError(message) {
-  process.stderr.write(`lithocinch density: ${message} (see "lithocinch density --help")\n`);
+  process.stderr.write(`lithocinch density: ${esc(message)} (see "lithocinch density --help")\n`);
   process.exitCode = 2;
 }
 
@@ -398,7 +385,7 @@ export async function runDensity(argv, version) {
     process.stdout.write(render(mode, items, counts, { version, dryRun: o.dryRun, exit }) + '\n');
     process.exitCode = exit;
   } catch (err) {
-    process.stderr.write(`lithocinch density: could not complete: ${err.message}\n`);
+    process.stderr.write(`lithocinch density: could not complete: ${esc(err.message)}\n`);
     process.exitCode = 3;
   } finally {
     process.off('SIGINT', onSignal);
