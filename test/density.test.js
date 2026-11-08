@@ -1471,6 +1471,29 @@ test('density sub-command: the --brief reason is cut at 160 characters of output
   });
 });
 
+test('density sub-command: the --brief cut counts an emoji as one character, so a 158-character reason holding emoji prints whole', async () => {
+  await withDir(async (dir) => {
+    const emoji = String.fromCodePoint(0x1f600);
+    const out = path.join(dir, 'out');
+    const suffix = '_lco.jpg already exists (--overwrite replaces it)';
+    const room = 158 - (out.length + 1) - suffix.length;
+    const n = Math.min(40, room);
+    assert.ok(n >= 3, `room for ${room}`);
+    const base = 'x'.repeat(room - n) + emoji.repeat(n);
+    const name = `${base}.jpg`;
+    await fs.writeFile(path.join(dir, name), await bareJpeg());
+    const args = ['density', path.join(dir, name), '--ppi', '72', '-o', out, '--brief'];
+    assert.equal(run(...args).status, 0);
+    const r = run(...args);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const reason = `${path.join(out, `${base}_lco.jpg`)} already exists (--overwrite replaces it)`;
+    assert.equal([...reason].length, 158);
+    assert.ok(reason.length > 160, 'more than 160 UTF-16 units');
+    const line = r.stdout.split('\n')[0];
+    assert.ok(line.endsWith(`  (${reason})`), line);
+  });
+});
+
 test('density sub-command: messages on stderr show the control and invisible characters of a name as escapes', async () => {
   await withDir(async (dir) => {
     const bs = String.fromCharCode(92);

@@ -285,7 +285,8 @@ function briefReason(reason) {
   const chars = escChars(reason);
   let shown = 0;
   let width = 0;
-  while (shown < chars.length && width + chars[shown].length <= 160) width += chars[shown++].length;
+  // Width in code points, so an emoji (two UTF-16 units) counts as one character of output.
+  while (shown < chars.length && width + [...chars[shown]].length <= 160) width += [...chars[shown++]].length;
   return shown < chars.length ? `${chars.slice(0, shown).join('')}… (+${chars.length - shown} chars; --json for all)` : chars.join('');
 }
 
