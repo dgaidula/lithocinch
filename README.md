@@ -389,7 +389,13 @@ A file name is printed with control characters and Unicode format characters
 mark, tag characters) as escapes such as `\u200b`, so two names that differ only
 by one do not look alike; `--json` keeps the real name. Joiners used on purpose
 print as escapes too (an emoji family sequence, a Persian zero-width non-joiner,
-a flag’s tag characters). The main command prints names the same way in its per-file lines and messages, and both commands in the messages they write to stderr. Not covered: other invisible characters outside Cf
+a flag’s tag characters). The main command prints names the same way in its
+per-file lines, warnings, errors and progress bar, and `density` in the messages
+it writes to stderr; the main command’s own usage errors (an unknown option, a
+bad `--density` value) still print the argument as typed. A message that spans
+several lines, such as libvips’ error for a truncated JPEG, prints as one line
+with each line break shown as `\x0a`: nothing is dropped, and `--json` keeps the
+text as it was. Not covered: other invisible characters outside Cf
 (variation selectors such as U+FE0F, the Hangul fillers, the combining grapheme
 joiner) print raw, and a backslash is not escaped, so a name typed with the
 literal text `\u200b` prints like one holding the character; `--json` tells
