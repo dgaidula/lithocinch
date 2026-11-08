@@ -394,8 +394,7 @@ per-file lines, warnings, errors and progress bar, and `density` in the messages
 it writes to stderr; the main command’s own usage errors (an unknown option, a
 bad `--density` value) still print the argument as typed. A message that spans
 several lines, such as libvips’ error for a truncated JPEG, prints as one line
-with each line break shown as `\x0a`: nothing is dropped, and `--json` keeps the
-text as it was. Not covered: other invisible characters outside Cf
+with each line break shown as `\x0a`, so nothing is dropped. Not covered: other invisible characters outside Cf
 (variation selectors such as U+FE0F, the Hangul fillers, the combining grapheme
 joiner) print raw, and a backslash is not escaped, so a name typed with the
 literal text `\u200b` prints like one holding the character; `--json` tells
